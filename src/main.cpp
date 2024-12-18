@@ -1,7 +1,7 @@
+#include <Arduino.h>
 #include <WiFi.h> // WiFi library for Pico W
 #include <SPI.h>
 #include <Freenove_RFID_Lib_for_Pico.h>
-#include <Arduino.h>
 #include <FirebaseJson.h>
 #include "fonts.hpp"
 #include "wifi_config.hpp"
@@ -9,47 +9,44 @@
 #include <RF24.h>
 #include <nRF24L01.h>
 
-
-
 // Definicje pinów
 #define RC_522_SCK 2
 #define RC_522_MOSI 3
 #define RC_522_MISO 4
+
 #define RC_522_SDA 5
 #define RC_522_RST 6
-
-#define nrf_ce_yellow 26
-#define nrf_cns_orange 27
-
 #define LCD_OE 7      // Output Enable
 #define LCD_A 8       // Row address A
 #define LCD_B 9       // Row address B
 #define LCD_CLK 10    // Clock for shifting data
 #define LCD_LATCH 11  // Latch to display data
 #define LCD_DATA 12   // Serial data input
-
 #define BUTTON_YELLOW 14
 #define BUTTON_BLACK 15
-
 #define LED_RED 13
 #define LED_GREEN 22
 
-#define BOOTSEL_PIN 23 // GPIO powiązane z przyciskiem BOOTSEL
+#define nrf_ce_yellow 26
+#define nrf_cns_orange 27
 
 
-char *gate_type = "START";
-char *gate_type = "END";
+
+String gate_type = "START"; // Hostname of the server
+//char *gate_type = "END";
 
 
-// Tablica użytkownika (1 bit = 1 piksel)
-//static bool user_buffer[16][32] = {0}; 
+uint8_t transmiter_address[6] = "Gat00";
+uint8_t reciever_address[6] = "Gat01";
+
 
 
 RF24 radio(nrf_ce_yellow, nrf_cns_orange); // CE, CSN
-const uint8_t address[6] = "1Node"; // Adres odbiornika
 
 
-volatile bool beam_brake_sensor = false;
+
+volatile bool black_pressed = false;
+volatile bool yellow_pressed = false;
 
 // Zmienne do przechowywania czasu
 volatile int counter_m = 0;  // Minuty
@@ -78,9 +75,132 @@ static unsigned long replay_time = 0;
 P10Display main_display(LCD_A, LCD_B, LCD_CLK, LCD_DATA, LCD_LATCH, LCD_OE);
 
 
+void handleInterrupt();
+void handleInterruptYellow();
+void handleInterruptBlack();
+void updateTime();
+void handleButtonPress(int buttonPin, const String& message, unsigned long& lastPressTime);
+void handleServerResponse();
 
-void handleInterrupt() {
-  beam_brake_sensor = true;
+void connectToWiFi();
+void reconnectWiFi();
+void reconnectToServer();
+void checkAndReconnectWiFi();
+void checkAndReconnectToSerwer();
+void readDataFromRFIDCard();
+bool synchronize_time(uint8_t *transmiter_address, uint8_t *reciever_address);
+
+
+
+void setup() {
+  Serial.begin(115200);
+  //if (!radio.begin()) {
+  //  Serial.println("nRF24L01 initialization failed!");
+  //  while (1);
+  //}
+  
+  Serial.println(gate_type);
+  SPI.setSCK(2);
+  SPI.setTX(3);
+  SPI.setRX(4);
+  SPI.begin();
+
+  pinMode(BUTTON_YELLOW, INPUT_PULLUP);
+  pinMode(BUTTON_BLACK, INPUT_PULLUP); 
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_RED, OUTPUT);
+
+  digitalWrite(LED_GREEN, HIGH);
+  digitalWrite(LED_RED, LOW);
+
+  rfid.init(); //initialization
+  radio.begin();
+
+  //connectToWiFi();
+  //reconnectToServer();
+  attachInterrupt(digitalPinToInterrupt(BUTTON_YELLOW), handleInterruptYellow, FALLING);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
+
+}
+
+
+
+
+
+
+//                                                                                                       SETUP 1
+
+
+void setup1(){
+  
+  
+}
+
+
+//                                                                                                       LOOP 0
+
+void loop() {
+  //checkAndReconnectWiFi();
+  //checkAndReconnectToSerwer();
+  //handleButtonPress(BUTTON_YELLOW, "ON", BUTTON_YELLOW_TIME);
+  //handleButtonPress(BUTTON_BLACK, "OFF", BUTTON_BLACK_TIME);
+  //handleServerResponse();
+  //Serial.println("welll");
+
+  if (black_pressed) {
+    black_pressed = false;
+    synchronize_time(transmiter_address, reciever_address);
+  }
+  
+
+  static unsigned long repeat_rfid = 0;
+  if (millis() - repeat_rfid > 500) {
+    readDataFromRFIDCard();
+    repeat_rfid = millis();
+
+
+    
+  }
+
+}
+
+
+
+
+
+//                                                                                                       LOOP 1
+
+void loop1() {
+  updateTime();
+  main_display.default_timer_screen(66, counter_m, counter_s, counter_ms);
+  main_display.refresh();
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+void handleInterruptYellow() {
+  static bool last_state = 0;
+  yellow_pressed = true;
+}
+
+void handleInterruptBlack() {
+  static bool last_state = 0;
+  black_pressed = true;
+
 }
 
 
@@ -104,17 +224,6 @@ void handleButtonPress(int buttonPin, const String& message, unsigned long& last
     lastPressTime = millis();
     replay_time = micros();
     
-
-    // Lokalna reakcja na przycisk
-    /*
-    if (message == "ON") {
-      digitalWrite(LED_GREEN, LOW);  // Turn green LED ON
-      digitalWrite(LED_RED, HIGH);  // Turn red LED OFF
-    } else if (message == "OFF") {
-      digitalWrite(LED_GREEN, HIGH); // Turn green LED OFF
-      digitalWrite(LED_RED, LOW);    // Turn red LED ON
-    }
-    */
   }
 }
 
@@ -122,11 +231,9 @@ void handleServerResponse() {
   while (client.available()) {
 
     String response = client.readStringUntil('\n');
-
     response.trim(); // Remove newline and whitespace
     Serial.println(micros() - replay_time);
     replay_time = 0;
-
     Serial.print("Received: ");
     Serial.println(response);
     if (response == "ON") {
@@ -140,24 +247,39 @@ void handleServerResponse() {
 }
 
 void reconnectWiFi() {
-  Serial.println("Reconnecting to WiFi...");
+  Serial.println("Connecting to WiFi...");
   WiFi.disconnect();
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
-    Serial.print(".");
+    Serial.print("Retrying...");
   }
-  Serial.println("\nReconnected to WiFi!");
+  Serial.println("\nConnected to WiFi!");
 }
 
 void reconnectToServer() {
-  Serial.println("Reconnecting to the server...");
+  Serial.println("Connecting to the server...");
   while (!client.connect(serverIP, serverPort)) {
     delay(1000);
     Serial.println("Retrying...");
   }
-  Serial.println("Reconnected to the server!");
+  Serial.println("Connected to the server!");
 }
+
+
+void checkAndReconnectWiFi() {
+  if (WiFi.status() != WL_CONNECTED) {
+    reconnectWiFi();
+  }
+}
+
+void checkAndReconnectToSerwer() {
+if (!client.connected()) {
+    reconnectToServer();
+  }
+
+}
+
 
 
 void readDataFromRFIDCard() {
@@ -181,24 +303,7 @@ void readDataFromRFIDCard() {
 
 
 
-void setup() {
-  Serial.begin(115200);
-  SPI.setRX(4);
-  SPI.setCS(5);
-  SPI.setSCK(2);
-  SPI.setTX(3);
-  SPI.begin();
-  rfid.init(); //initialization
-
-  pinMode(BUTTON_YELLOW, INPUT_PULLUP);
-  pinMode(BUTTON_BLACK, INPUT_PULLUP); 
-  pinMode(LED_GREEN, OUTPUT);
-  pinMode(LED_RED, OUTPUT);
-  digitalWrite(LED_GREEN, HIGH);
-  digitalWrite(LED_RED, LOW);
-
-  pinMode(BOOTSEL_PIN, INPUT_PULLUP); // Ustaw GPIO jako wejście z pull-up
-
+void connectToWiFi() {
   // Connect to WiFi
   Serial.print("Connecting to WiFi...");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -208,8 +313,6 @@ void setup() {
     digitalWrite(LED_RED, HIGH);
     Serial.print(".");
   }
-
-  NTP.begin("pool.ntp.org", "time.nist.gov");
 
 
   Serial.println("\nConnected to WiFi!");
@@ -233,118 +336,83 @@ void setup() {
     Serial.print(serverHostname);
     Serial.print(": ");
     Serial.println(serverIP);
-    
   }
-
-
-
-  // Connect to the server using TCP
-  Serial.println("Connecting to the server...");
-  if (client.connect(serverIP, serverPort)) {
-    Serial.println("Connected to the server!");
-  } else {
-    Serial.println("Connection to the server failed!");
-    delay(1000); // Stop if connection fails
-  }
-
-
-  //serwer.begin();
-  //Serial.println("Serwer uruchomiony");
-  //Serial.println(WiFi.localIP());
-
-
-
-
-
-  // Wprowadź dane do user_buffer jako przykład
-  //Serial.println(user_buffer[0][0]);
-
-
-}
-
-
-void setup1(){
-  attachInterrupt(digitalPinToInterrupt(BUTTON_YELLOW), handleInterrupt, FALLING);
-
-  if (!radio.begin()) {
-    Serial.println("nRF24L01 initialization failed!");
-    while (1);
-  }
-  radio.openWritingPipe(address); // Ustaw adres odbiornika
-  radio.setPALevel(RF24_PA_HIGH); // Zwiększ moc
-  radio.setDataRate(RF24_2MBPS); // Zmniejsz prędkość transmisji
-  radio.setChannel(100); // Zmień kanał na mniej zatłoczony
-  radio.setRetries(0, 0); // Retransmisja: 5 prób z odstępem 15 x 250 µs
-  radio.enableAckPayload(); // Włącz odbieranie ACK payload
-  Serial.println("Transmitter ready");
-
 }
 
 
 
+bool synchronize_time(uint8_t *transmiter_address, uint8_t *reciever_address) {
+    uint64_t sendData1 = 0;
+    uint64_t sendData2 = 0;
+    uint64_t recieverTime = 0;
+    int64_t timeDiff = 0;
 
 
+    // Ustawienia radia
+    radio.setPALevel(RF24_PA_HIGH);
+    radio.setDataRate(RF24_2MBPS);
+    radio.setChannel(100);
+    radio.setRetries(0, 0);
+    radio.openWritingPipe(reciever_address);
+    radio.openReadingPipe(1,transmiter_address);
 
-void loop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    reconnectWiFi();
-  }
-  
+    // Synchronizacja - wysłanie sygnału "TS"
+    radio.stopListening();
+    const char *commend_synchronize = "TS";
+    bool success = radio.write(commend_synchronize, strlen(commend_synchronize) + 1);
 
-  handleButtonPress(BUTTON_YELLOW, "ON", BUTTON_YELLOW_TIME);
-  handleButtonPress(BUTTON_BLACK, "OFF", BUTTON_BLACK_TIME);
-  handleServerResponse();
-
-  // Ensure connection to the server
-  if (!client.connected()) {
-    reconnectToServer();
-  }
-
-  static unsigned long repeat_rfid = 0;
-  if (millis() - repeat_rfid > 500) {
-    readDataFromRFIDCard();
-    repeat_rfid = millis();
-  }
-
-  static unsigned int reapeat_radio = 0;
-  if (millis() - reapeat_radio > 1000) {
-    unsigned long sendTime = 0;
-    unsigned long recievedTime = 0;
-    unsigned long receiverTime = 0;
-    sendTime = micros(); // Czas wysłania wiadomości
-    bool success = radio.write(NULL, 0); // Wyślij pustą wiadomość
     if (success) {
-      recievedTime = micros();
-      bool ackReceived = radio.isAckPayloadAvailable(); // Sprawdź, czy ACK payload jest dostępny
-      if (ackReceived) {
-          radio.read(&receiverTime, sizeof(receiverTime)); // Odczytaj czas z ACK payload
-          Serial.print("Received ACK with receiver time: ");
-          Serial.println(receiverTime);
+        Serial.println("Wysłano1, czekanie na potwierdzenie!");
+        // Odbieranie potwierdzenia
+        radio.startListening();
+        char recievedText[32] = "";
+
+        unsigned long start_time = micros();
+        while (!radio.available() && micros() - start_time < 1000) {}
+
+        if (radio.available()) {
+            Serial.println("odebrano potwierdzenie");
+            radio.read(&recievedText, sizeof(recievedText));
+
+            if (String(recievedText) == "OK") {
+                Serial.println("Receiver ready...");
+                radio.stopListening();
+                //delay(5);
+
+                // Wysyłanie czasu
+                sendData1 = micros();
+                bool success2 = radio.write(NULL, 0);
+                sendData2 = micros();
+
+                if (success2) {
+                    radio.startListening();
+                    unsigned long start_time2 = micros();
+
+                    while (!radio.available() && micros() - start_time2 < 1000) {}
+
+                    if (radio.available()) {
+                        // Odbiór czasu z odbiornika
+                        radio.read(&recieverTime, sizeof(recieverTime));
+                        timeDiff = (int64_t)recieverTime - (int64_t)sendData1;
+
+                        // Obsługa różnicy czasu
+                        if (timeDiff > 0) {
+                            Serial.print("Receiver is ahead by ");
+                            Serial.print(timeDiff);
+                            Serial.println(" microseconds");
+                        } else {
+                            Serial.print("Receiver is behind by ");
+                            Serial.print(-timeDiff);
+                            Serial.println(" microseconds");
+                        }
+                        return true;
+                    }
+                }
+            }
         }
-
-
-      unsigned long rtt = recievedTime - sendTime;
-      Serial.print("Round trip time (µs): ");
-      Serial.println(rtt);
-    } else {
-      Serial.println("Message failed, no ACK received");
     }
-    reapeat_radio = millis();
-  }
-
-  
-}
 
 
-
-
-
-void loop1() {
-
-  
-
-  
-  updateTime();
-  main_display.default_timer_screen(66, counter_m, counter_s, counter_ms);
-  main_display.refresh();
+    Serial.println("Synchronization failed!");
+    return false;
 }
