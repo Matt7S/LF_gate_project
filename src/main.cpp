@@ -9,72 +9,84 @@
 #include <RF24.h>
 #include <nRF24L01.h>
 
-// Definicje pinów
-#define RC_522_SCK 2
-#define RC_522_MOSI 3
-#define RC_522_MISO 4
+// Define pins for SPI
+#define SPI0_PIN_SCK 2
+#define SPI0_PIN_MOSI 3
+#define SPI0_PIN_MISO 4
 
+// Define pins for RFID
 #define RC_522_SDA 5
 #define RC_522_RST 6
+
+// Define pins for LCD P10
 #define LCD_OE 7      // Output Enable
 #define LCD_A 8       // Row address A
 #define LCD_B 9       // Row address B
 #define LCD_CLK 10    // Clock for shifting data
 #define LCD_LATCH 11  // Latch to display data
 #define LCD_DATA 12   // Serial data input
+
+#define NRF_INTERRUPT 13
+
+// Define pins for buttons and LEDs
 #define BUTTON_YELLOW 14
 #define BUTTON_BLACK 15
-#define LED_RED 13
-#define LED_GREEN 22
 
+// Define pins for LEDs
+#define LED_RED 16
+#define LED_GREEN 17
+
+// Define pins for NRF24L01
 #define nrf_ce_yellow 26
 #define nrf_cns_orange 27
 
 
-
+// Define gate type
 String gate_type = "START"; // Hostname of the server
 //char *gate_type = "END";
 
-
+// Define addresses for NRF24L01
 uint8_t transmiter_address[6] = "Gat00";
 uint8_t reciever_address[6] = "Gat01";
 
-
-
+// Create radio object
 RF24 radio(nrf_ce_yellow, nrf_cns_orange); // CE, CSN
-
 
 
 volatile bool black_pressed = false;
 volatile bool yellow_pressed = false;
+volatile bool nr24_interrupt = false;
 
-// Zmienne do przechowywania czasu
+// Timer variables
 volatile int counter_m = 0;  // Minuty
 volatile int counter_s = 0;  // Sekundy
 volatile int counter_ms = 0; // Milisekundy
 
-
+// Button debounce time
 static int BUTTON_SKIP_TIME = 500; // Debounce time for buttons
 static unsigned long BUTTON_YELLOW_TIME = 200;
 static unsigned long BUTTON_BLACK_TIME = 200;
 
-
+// WiFi and server variables
 const char* serverHostname = "pigate.local"; // Hostname of the server
 IPAddress serverIP;                          // Store resolved IP
 const int serverPort = 1234;                 // Replace with your server's port number
 WiFiClient client; // TCP client object
 
 
-//D10 - CS Pin、D5 - RST Pin
+// RFID variables
 RFID rfid(RC_522_SDA, RC_522_RST);   
 unsigned char status;
 unsigned char str[MAX_LEN];  //MAX_LEN is 16, the maximum length of the array
 static unsigned long replay_time = 0;
 
-
+// Display object
 P10Display main_display(LCD_A, LCD_B, LCD_CLK, LCD_DATA, LCD_LATCH, LCD_OE);
 
 
+uint64_t nrf_interrupt_time = 0;
+
+// Function prototypes
 void handleInterrupt();
 void handleInterruptYellow();
 void handleInterruptBlack();
@@ -89,6 +101,7 @@ void checkAndReconnectWiFi();
 void checkAndReconnectToSerwer();
 void readDataFromRFIDCard();
 bool synchronize_time(uint8_t *transmiter_address, uint8_t *reciever_address);
+bool waitForRadio(unsigned long timeout);
 
 
 
@@ -100,9 +113,9 @@ void setup() {
   //}
   
   Serial.println(gate_type);
-  SPI.setSCK(2);
-  SPI.setTX(3);
-  SPI.setRX(4);
+  SPI.setSCK(SPI0_PIN_SCK);
+  SPI.setTX(SPI0_PIN_MOSI);
+  SPI.setRX(SPI0_PIN_MISO);
   SPI.begin();
 
   pinMode(BUTTON_YELLOW, INPUT_PULLUP);
@@ -115,11 +128,13 @@ void setup() {
 
   rfid.init(); //initialization
   radio.begin();
+  radio.maskIRQ(false, true, true);
 
   //connectToWiFi();
   //reconnectToServer();
   attachInterrupt(digitalPinToInterrupt(BUTTON_YELLOW), handleInterruptYellow, FALLING);
   attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
+
 
 }
 
@@ -186,7 +201,9 @@ void loop1() {
 
 
 
-
+void handleInterrupt() {
+  nrf_interrupt_time = micros();
+}
 
 
 
@@ -341,78 +358,75 @@ void connectToWiFi() {
 
 
 
-bool synchronize_time(uint8_t *transmiter_address, uint8_t *reciever_address) {
-    uint64_t sendData1 = 0;
-    uint64_t sendData2 = 0;
-    uint64_t recieverTime = 0;
+bool synchronize_time(uint8_t *transmitter_address, uint8_t *receiver_address) {
+    uint64_t sendData1 = 0, sendData2 = 0, receiverTime = 0;
     int64_t timeDiff = 0;
-
 
     // Ustawienia radia
     radio.setPALevel(RF24_PA_HIGH);
-    radio.setDataRate(RF24_2MBPS);
+    radio.setDataRate(RF24_1MBPS);
     radio.setChannel(100);
     radio.setRetries(0, 0);
-    radio.openWritingPipe(reciever_address);
-    radio.openReadingPipe(1,transmiter_address);
+    radio.openWritingPipe(receiver_address);
+    radio.openReadingPipe(1, transmitter_address);
 
     // Synchronizacja - wysłanie sygnału "TS"
     radio.stopListening();
-    const char *commend_synchronize = "TS";
-    bool success = radio.write(commend_synchronize, strlen(commend_synchronize) + 1);
-
-    if (success) {
-        Serial.println("Wysłano1, czekanie na potwierdzenie!");
-        // Odbieranie potwierdzenia
-        radio.startListening();
-        char recievedText[32] = "";
-
-        unsigned long start_time = micros();
-        while (!radio.available() && micros() - start_time < 1000) {}
-
-        if (radio.available()) {
-            Serial.println("odebrano potwierdzenie");
-            radio.read(&recievedText, sizeof(recievedText));
-
-            if (String(recievedText) == "OK") {
-                Serial.println("Receiver ready...");
-                radio.stopListening();
-                //delay(5);
-
-                // Wysyłanie czasu
-                sendData1 = micros();
-                bool success2 = radio.write(NULL, 0);
-                sendData2 = micros();
-
-                if (success2) {
-                    radio.startListening();
-                    unsigned long start_time2 = micros();
-
-                    while (!radio.available() && micros() - start_time2 < 1000) {}
-
-                    if (radio.available()) {
-                        // Odbiór czasu z odbiornika
-                        radio.read(&recieverTime, sizeof(recieverTime));
-                        timeDiff = (int64_t)recieverTime - (int64_t)sendData1;
-
-                        // Obsługa różnicy czasu
-                        if (timeDiff > 0) {
-                            Serial.print("Receiver is ahead by ");
-                            Serial.print(timeDiff);
-                            Serial.println(" microseconds");
-                        } else {
-                            Serial.print("Receiver is behind by ");
-                            Serial.print(-timeDiff);
-                            Serial.println(" microseconds");
-                        }
-                        return true;
-                    }
-                }
-            }
-        }
+    const char *command_synchronize = "TS";
+    if (!radio.write(command_synchronize, strlen(command_synchronize) + 1)) {
+        return false;
     }
 
+    Serial.println("Wysłano1, czekanie na potwierdzenie!");
+    radio.startListening();
+    char receivedText[32] = "";
 
-    Serial.println("Synchronization failed!");
-    return false;
+    if (!waitForRadio(1000)) {
+        return false;
+    }
+
+    radio.read(&receivedText, sizeof(receivedText));
+    if (String(receivedText) != "OK") {
+        return false;
+    }
+
+    Serial.println("Receiver ready...");
+    radio.stopListening();
+
+    // Wysyłanie czasu
+    radio.maskIRQ(false, true, true);
+    attachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT), handleInterrupt, FALLING);
+    //sendData1 = micros();
+    
+    if (!radio.write(NULL, 0)) {
+        return false;
+    }
+    sendData2 = micros();
+    sendData1 = nrf_interrupt_time;
+    detachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT));
+
+    radio.startListening();
+    if (!waitForRadio(1000)) {
+        return false;
+    }
+
+    // Odbiór czasu z odbiornika
+    radio.read(&receiverTime, sizeof(receiverTime));
+    timeDiff = (int64_t)receiverTime - (int64_t)sendData1;
+
+    // Obsługa różnicy czasu
+    Serial.print("Receiver is ");
+    Serial.print(timeDiff > 0 ? "ahead by " : "behind by ");
+    Serial.print(abs(timeDiff));
+    Serial.println(" microseconds");
+
+    return true;
 }
+
+bool waitForRadio(unsigned long timeout) {
+    unsigned long start_time = micros();
+    while (!radio.available() && micros() - start_time < timeout) {}
+    return radio.available();
+}
+
+
