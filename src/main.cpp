@@ -8,7 +8,9 @@
 #include "P10Display.hpp"
 #include <RF24.h>
 #include <nRF24L01.h>
+#include <Wire.h>
 
+/*
 // Define pins for SPI
 #define SPI0_PIN_SCK 2
 #define SPI0_PIN_MOSI 3
@@ -18,27 +20,33 @@
 #define RC_522_SDA 5
 #define RC_522_RST 6
 
-// Define pins for LCD P10
-#define LCD_OE 7      // Output Enable
-#define LCD_A 8       // Row address A
-#define LCD_B 9       // Row address B
-#define LCD_CLK 10    // Clock for shifting data
-#define LCD_LATCH 11  // Latch to display data
-#define LCD_DATA 12   // Serial data input
+// Define pins for NRF24L01
+#define NRF_INTERRUPT 7
+#define NRF_CE 10 //yellow
+#define NRF_CSN 11 // orange
 
-#define NRF_INTERRUPT 13
+// Define pins for barcode scanner
+#define BARCODE_SCANNER_SDA 8  // reciever on the scanner
+#define BARCODE_SCANNER_SCL 9  // transmiter on the scanner
+
+// Define pins for LEDs
+#define LED_RED 12
+#define LED_GREEN 13
 
 // Define pins for buttons and LEDs
 #define BUTTON_YELLOW 14
 #define BUTTON_BLACK 15
 
-// Define pins for LEDs
-#define LED_RED 16
-#define LED_GREEN 17
+// Define pins for LCD P10
+#define LCD_OE 16      // Output Enable
+#define LCD_A 17       // Row address A
+#define LCD_B 18       // Row address B
+#define LCD_CLK 19    // Clock for shifting data
+#define LCD_LATCH 20  // Latch to display data
+#define LCD_DATA 21   // Serial data input
 
-// Define pins for NRF24L01
-#define nrf_ce_yellow 26
-#define nrf_cns_orange 27
+
+
 
 
 // Define gate type
@@ -50,7 +58,7 @@ uint8_t transmiter_address[6] = "Gat00";
 uint8_t reciever_address[6] = "Gat01";
 
 // Create radio object
-RF24 radio(nrf_ce_yellow, nrf_cns_orange); // CE, CSN
+RF24 radio(NRF_CE, NRF_CSN); // CE, CSN
 
 
 volatile bool black_pressed = false;
@@ -83,7 +91,6 @@ static unsigned long replay_time = 0;
 // Display object
 P10Display main_display(LCD_A, LCD_B, LCD_CLK, LCD_DATA, LCD_LATCH, LCD_OE);
 
-
 uint64_t nrf_interrupt_time = 0;
 
 // Function prototypes
@@ -106,11 +113,9 @@ bool waitForRadio(unsigned long timeout);
 
 
 void setup() {
+  delay(2000);
   Serial.begin(115200);
-  //if (!radio.begin()) {
-  //  Serial.println("nRF24L01 initialization failed!");
-  //  while (1);
-  //}
+  
   
   Serial.println(gate_type);
   SPI.setSCK(SPI0_PIN_SCK);
@@ -127,13 +132,28 @@ void setup() {
   digitalWrite(LED_RED, LOW);
 
   rfid.init(); //initialization
-  radio.begin();
+  //radio.begin();
+
+  
+  while (!radio.begin()) {
+    Serial.println("nRF24L01 initialization failed!");
+    delay(1000);
+  }
+  Serial.println("nRF24L01 initialized!");
+
   radio.maskIRQ(false, true, true);
 
   //connectToWiFi();
   //reconnectToServer();
   attachInterrupt(digitalPinToInterrupt(BUTTON_YELLOW), handleInterruptYellow, FALLING);
   attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
+
+
+  
+  Serial2.setTX(BARCODE_SCANNER_TX);
+  Serial2.setRX(BARCODE_SCANNER_RX);
+  Serial2.begin(9600);
+  Serial.println("Serial1 initialized!");
 
 
 }
@@ -161,6 +181,7 @@ void loop() {
   //handleButtonPress(BUTTON_BLACK, "OFF", BUTTON_BLACK_TIME);
   //handleServerResponse();
   //Serial.println("welll");
+  attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
 
   if (black_pressed) {
     black_pressed = false;
@@ -172,9 +193,11 @@ void loop() {
   if (millis() - repeat_rfid > 500) {
     readDataFromRFIDCard();
     repeat_rfid = millis();
+  }
 
-
-    
+  if (Serial2.available()) {
+    String barcode = Serial1.readStringUntil('\n');
+    Serial.println(barcode);
   }
 
 }
@@ -215,6 +238,7 @@ void handleInterruptYellow() {
 }
 
 void handleInterruptBlack() {
+  Serial.println("Black button pressed");
   static bool last_state = 0;
   black_pressed = true;
 
@@ -359,12 +383,14 @@ void connectToWiFi() {
 
 
 bool synchronize_time(uint8_t *transmitter_address, uint8_t *receiver_address) {
+    detachInterrupt(digitalPinToInterrupt(BUTTON_BLACK));
+    Serial.println("Synchronizing time...");
     uint64_t sendData1 = 0, sendData2 = 0, receiverTime = 0;
     int64_t timeDiff = 0;
 
     // Ustawienia radia
     radio.setPALevel(RF24_PA_HIGH);
-    radio.setDataRate(RF24_1MBPS);
+    radio.setDataRate(RF24_2MBPS);
     radio.setChannel(100);
     radio.setRetries(0, 0);
     radio.openWritingPipe(receiver_address);
@@ -374,6 +400,7 @@ bool synchronize_time(uint8_t *transmitter_address, uint8_t *receiver_address) {
     radio.stopListening();
     const char *command_synchronize = "TS";
     if (!radio.write(command_synchronize, strlen(command_synchronize) + 1)) {
+        Serial.println("Failed to send command!");
         return false;
     }
 
@@ -430,3 +457,74 @@ bool waitForRadio(unsigned long timeout) {
 }
 
 
+
+*/
+
+
+#include <Arduino.h>
+#include <Wire.h>
+
+#define I2C_SDA 8
+#define I2C_SCL 9
+
+// Adres I2C skanera QR Unit QRCode (STM32F030)
+#define QR_SCANNER_ADDR 0x21
+
+#define UNIT_QRCODE_READY_REG        0x0010
+#define UNIT_QRCODE_LENGTH_REG       0x0020
+#define UNIT_QRCODE_DATA_REG         0x1000
+
+void writeRegister(uint16_t reg, uint8_t *data, uint8_t len) {
+    Wire.beginTransmission(QR_SCANNER_ADDR);
+    Wire.write(reg & 0xFF);           // Lower byte of register
+    Wire.write((reg >> 8) & 0xFF);   // Upper byte of register
+    for (uint8_t i = 0; i < len; i++) {
+        Wire.write(data[i]);
+    }
+    Wire.endTransmission();
+}
+
+void readRegister(uint16_t reg, uint8_t *data, uint16_t len) {
+    Wire.beginTransmission(QR_SCANNER_ADDR);
+    Wire.write(reg & 0xFF);           // Lower byte of register
+    Wire.write((reg >> 8) & 0xFF);   // Upper byte of register
+    Wire.endTransmission(false);
+    Wire.requestFrom(QR_SCANNER_ADDR, len);
+    for (uint16_t i = 0; i < len; i++) {
+        data[i] = Wire.read();
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    Wire.setSDA(I2C_SDA);
+    Wire.setSCL(I2C_SCL);
+    Wire.begin();
+    delay(100);
+    Serial.println("QR Code Scanner Ready");
+}
+
+void loop() {
+    uint8_t ready = 0;
+    readRegister(UNIT_QRCODE_READY_REG, &ready, 1);
+
+    if (ready) {
+        // Get length of data
+        uint8_t lengthData[2] = {0};
+        readRegister(UNIT_QRCODE_LENGTH_REG, lengthData, 2);
+        uint16_t length = (lengthData[1] << 8) | lengthData[0];
+
+        if (length > 0) {
+            uint8_t qrData[length];
+            readRegister(UNIT_QRCODE_DATA_REG, qrData, length);
+
+            Serial.print("QR Code Data: ");
+            for (uint16_t i = 0; i < length; i++) {
+                Serial.print((char)qrData[i]);
+            }
+            Serial.println();
+        }
+    }
+
+    delay(100);
+}
