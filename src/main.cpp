@@ -9,8 +9,10 @@
 #include <RF24.h>
 #include <nRF24L01.h>
 #include <Wire.h>
+#include <QRScanner.hpp>
+#include "hardware/timer.h"
 
-/*
+
 // Define pins for SPI
 #define SPI0_PIN_SCK 2
 #define SPI0_PIN_MOSI 3
@@ -91,6 +93,8 @@ static unsigned long replay_time = 0;
 // Display object
 P10Display main_display(LCD_A, LCD_B, LCD_CLK, LCD_DATA, LCD_LATCH, LCD_OE);
 
+QRScanner qrScanner(0x21, BARCODE_SCANNER_SDA, BARCODE_SCANNER_SCL, &Wire); // Adres I2C, SDA, SCL, Wire
+
 uint64_t nrf_interrupt_time = 0;
 
 // Function prototypes
@@ -109,6 +113,8 @@ void checkAndReconnectToSerwer();
 void readDataFromRFIDCard();
 bool synchronize_time(uint8_t *transmiter_address, uint8_t *reciever_address);
 bool waitForRadio(unsigned long timeout);
+
+
 
 
 
@@ -148,12 +154,18 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(BUTTON_YELLOW), handleInterruptYellow, FALLING);
   attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
 
+  qrScanner.begin();
+      // Ustawienia radia
+  radio.setPALevel(RF24_PA_HIGH);
+  radio.setDataRate(RF24_2MBPS);
+  radio.setChannel(100);
+  radio.setRetries(0, 0);
+  radio.setAutoAck(false); // Wyłącz automatyczne potwierdzenia dla wszystkich rurek
 
   
-  Serial2.setTX(BARCODE_SCANNER_TX);
-  Serial2.setRX(BARCODE_SCANNER_RX);
-  Serial2.begin(9600);
-  Serial.println("Serial1 initialized!");
+
+
+
 
 
 }
@@ -181,11 +193,20 @@ void loop() {
   //handleButtonPress(BUTTON_BLACK, "OFF", BUTTON_BLACK_TIME);
   //handleServerResponse();
   //Serial.println("welll");
-  attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
+  
 
   if (black_pressed) {
-    black_pressed = false;
-    synchronize_time(transmiter_address, reciever_address);
+    static unsigned long last_time = 0;
+    detachInterrupt(digitalPinToInterrupt(BUTTON_BLACK));
+    if (millis() - last_time > 500) {
+      synchronize_time(transmiter_address, reciever_address);
+
+      last_time = millis();
+      black_pressed = false;
+      attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
+    }
+    
+    
   }
   
 
@@ -195,10 +216,24 @@ void loop() {
     repeat_rfid = millis();
   }
 
-  if (Serial2.available()) {
-    String barcode = Serial1.readStringUntil('\n');
-    Serial.println(barcode);
-  }
+  // Check for user input to toggle mode
+    if (Serial.available() > 0) {
+        char command = Serial.read();
+        if (command == 'a') {
+            qrScanner.setMode(true); // Automatic mode
+            Serial.println("Switched to Automatic Mode");
+        } else if (command == 'm') {
+            qrScanner.setMode(false); // Manual mode
+            Serial.println("Switched to Manual Mode");
+        }
+    }
+
+    // Read QR code data
+    String qrCode = qrScanner.readQRCode(true); // Pass 'true' to filter out corrupted data
+    if (qrCode.length() > 0) {
+        Serial.print("QR Code: ");
+        Serial.println(qrCode);
+    }
 
 }
 
@@ -225,7 +260,7 @@ void loop1() {
 
 
 void handleInterrupt() {
-  nrf_interrupt_time = micros();
+  nrf_interrupt_time = timer_hw->timelr;
 }
 
 
@@ -383,69 +418,78 @@ void connectToWiFi() {
 
 
 bool synchronize_time(uint8_t *transmitter_address, uint8_t *receiver_address) {
-    detachInterrupt(digitalPinToInterrupt(BUTTON_BLACK));
+    //detachInterrupt(digitalPinToInterrupt(BUTTON_BLACK));
     Serial.println("Synchronizing time...");
-    uint64_t sendData1 = 0, sendData2 = 0, receiverTime = 0;
+    unsigned long sendData1 = 0;
+    unsigned long sendData2 = 0;
+    unsigned long receiverTime = 0;
+    unsigned long roundTripTimeStart = 0;
+    unsigned long roundTripTimeEnd = 0;
+    unsigned long roundTripTime = 0;
     int64_t timeDiff = 0;
 
-    // Ustawienia radia
-    radio.setPALevel(RF24_PA_HIGH);
-    radio.setDataRate(RF24_2MBPS);
-    radio.setChannel(100);
-    radio.setRetries(0, 0);
     radio.openWritingPipe(receiver_address);
     radio.openReadingPipe(1, transmitter_address);
 
     // Synchronizacja - wysłanie sygnału "TS"
     radio.stopListening();
-    const char *command_synchronize = "TS";
-    if (!radio.write(command_synchronize, strlen(command_synchronize) + 1)) {
-        Serial.println("Failed to send command!");
+    radio.openWritingPipe(reciever_address);
+    uint8_t command_synchronize = 0x01;
+    if (!radio.write(&command_synchronize, sizeof(command_synchronize))) {
+        Serial.println("Failed to send command TS!");
         return false;
     }
 
-    Serial.println("Wysłano1, czekanie na potwierdzenie!");
+    //Serial.println("Wysłano1, czekanie na potwierdzenie!");
     radio.startListening();
-    char receivedText[32] = "";
+    uint8_t receivedText = 0;
 
     if (!waitForRadio(1000)) {
+        Serial.println("Failed to receive OK!");
         return false;
     }
 
     radio.read(&receivedText, sizeof(receivedText));
-    if (String(receivedText) != "OK") {
+    if (receivedText != 0x01) {
+        Serial.print("Recieved but not OK(0x01), recieved: ");
+        Serial.println(receivedText);
         return false;
     }
 
-    Serial.println("Receiver ready...");
     radio.stopListening();
+    radio.openWritingPipe(reciever_address);
 
     // Wysyłanie czasu
     radio.maskIRQ(false, true, true);
-    attachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT), handleInterrupt, FALLING);
-    //sendData1 = micros();
-    
+    //attachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT), handleInterrupt, FALLING);
+    sendData1 = micros();
+    roundTripTimeStart = micros();
     if (!radio.write(NULL, 0)) {
+        Serial.println("Failed to send NULL!");
         return false;
     }
+    //delay(1);
     sendData2 = micros();
-    sendData1 = nrf_interrupt_time;
-    detachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT));
-
+    //sendData1 = nrf_interrupt_time;
+    //detachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT));
+    //delay(1);
     radio.startListening();
     if (!waitForRadio(1000)) {
+      Serial.println("Failed to receive synchronization time!");
         return false;
     }
-
+    roundTripTimeEnd = micros();
     // Odbiór czasu z odbiornika
     radio.read(&receiverTime, sizeof(receiverTime));
-    timeDiff = (int64_t)receiverTime - (int64_t)sendData1;
+    timeDiff = (int32_t)receiverTime - (int32_t)sendData1;
 
     // Obsługa różnicy czasu
     Serial.print("Receiver is ");
     Serial.print(timeDiff > 0 ? "ahead by " : "behind by ");
     Serial.print(abs(timeDiff));
-    Serial.println(" microseconds");
+    Serial.print(" microseconds");
+    Serial.print(" (Round trip time: ");
+    Serial.print(roundTripTimeEnd - roundTripTimeStart);
 
     return true;
 }
@@ -458,39 +502,7 @@ bool waitForRadio(unsigned long timeout) {
 
 
 
-*/
 
 
-#include <QRscanner.hpp>
 
-QRScanner qrScanner(0x21, 8, 9, &Wire); // Adres I2C, SDA, SCL, Wire
 
-void setup() {
-    Serial.begin(115200);
-    qrScanner.begin();
-    Serial.println("QR Scanner Initialized.");
-    Serial.println("Enter 'a' for Automatic mode or 'm' for Manual mode.");
-}
-
-void loop() {
-    // Check for user input to toggle mode
-    if (Serial.available() > 0) {
-        char command = Serial.read();
-        if (command == 'a') {
-            qrScanner.setMode(true); // Automatic mode
-            Serial.println("Switched to Automatic Mode");
-        } else if (command == 'm') {
-            qrScanner.setMode(false); // Manual mode
-            Serial.println("Switched to Manual Mode");
-        }
-    }
-
-    // Read QR code data
-    String qrCode = qrScanner.readQRCode();
-    if (qrCode.length() > 0) {
-        Serial.print("QR Code: ");
-        Serial.println(qrCode);
-    }
-
-    delay(100);
-}

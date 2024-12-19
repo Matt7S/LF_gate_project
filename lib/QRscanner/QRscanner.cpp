@@ -17,7 +17,7 @@ void QRScanner::setMode(bool automatic) {
     currentMode = automatic ? AUTOMATIC : MANUAL;
 }
 
-String QRScanner::readQRCode() {
+String QRScanner::readQRCode(bool filterCorrupted) {
     uint8_t ready = 0;
     readRegister(READY_REG, &ready, 1);
 
@@ -34,11 +34,20 @@ String QRScanner::readQRCode() {
             for (uint16_t i = 0; i < length; i++) {
                 qrCode += (char)qrData[i];
             }
+
+            if (filterCorrupted) {
+                for (size_t i = 0; i < qrCode.length(); i++) {
+                    if (qrCode[i] < 32 || qrCode[i] > 126) { // ASCII printable range
+                        return ""; // Corrupted data detected
+                    }
+                }
+            }
             return qrCode;
         }
     }
     return "";
 }
+
 
 void QRScanner::writeRegister(uint16_t reg, uint8_t *data, uint8_t len) {
     wire->beginTransmission(i2cAddress);

@@ -72,11 +72,13 @@ public:
     void setMode(bool automatic);
 
     /**
-     * @brief Reads a QR code from the scanner.
+     * @brief Reads QR code data from the scanner.
      * 
-     * @return A string containing the QR code data. Returns an empty string if no QR code is ready.
+     * @param filterCorrupted If true, filters out corrupted data and returns an empty string if data is invalid.
+     * @return A string containing the decoded QR code data, or an empty string if no data is available or if data is corrupted.
      */
-    String readQRCode();
+    String readQRCode(bool filterCorrupted = false);
+
 };
 
 #endif
