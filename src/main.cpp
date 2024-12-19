@@ -461,69 +461,35 @@ bool waitForRadio(unsigned long timeout) {
 */
 
 
-#include <Arduino.h>
-#include <Wire.h>
+#include <QRscanner.hpp>
 
-#define I2C_SDA 8
-#define I2C_SCL 9
-
-// Adres I2C skanera QR Unit QRCode (STM32F030)
-#define QR_SCANNER_ADDR 0x21
-
-#define UNIT_QRCODE_READY_REG        0x0010
-#define UNIT_QRCODE_LENGTH_REG       0x0020
-#define UNIT_QRCODE_DATA_REG         0x1000
-
-void writeRegister(uint16_t reg, uint8_t *data, uint8_t len) {
-    Wire.beginTransmission(QR_SCANNER_ADDR);
-    Wire.write(reg & 0xFF);           // Lower byte of register
-    Wire.write((reg >> 8) & 0xFF);   // Upper byte of register
-    for (uint8_t i = 0; i < len; i++) {
-        Wire.write(data[i]);
-    }
-    Wire.endTransmission();
-}
-
-void readRegister(uint16_t reg, uint8_t *data, uint16_t len) {
-    Wire.beginTransmission(QR_SCANNER_ADDR);
-    Wire.write(reg & 0xFF);           // Lower byte of register
-    Wire.write((reg >> 8) & 0xFF);   // Upper byte of register
-    Wire.endTransmission(false);
-    Wire.requestFrom(QR_SCANNER_ADDR, len);
-    for (uint16_t i = 0; i < len; i++) {
-        data[i] = Wire.read();
-    }
-}
+QRScanner qrScanner(0x21, 8, 9, &Wire); // Adres I2C, SDA, SCL, Wire
 
 void setup() {
     Serial.begin(115200);
-    Wire.setSDA(I2C_SDA);
-    Wire.setSCL(I2C_SCL);
-    Wire.begin();
-    delay(100);
-    Serial.println("QR Code Scanner Ready");
+    qrScanner.begin();
+    Serial.println("QR Scanner Initialized.");
+    Serial.println("Enter 'a' for Automatic mode or 'm' for Manual mode.");
 }
 
 void loop() {
-    uint8_t ready = 0;
-    readRegister(UNIT_QRCODE_READY_REG, &ready, 1);
-
-    if (ready) {
-        // Get length of data
-        uint8_t lengthData[2] = {0};
-        readRegister(UNIT_QRCODE_LENGTH_REG, lengthData, 2);
-        uint16_t length = (lengthData[1] << 8) | lengthData[0];
-
-        if (length > 0) {
-            uint8_t qrData[length];
-            readRegister(UNIT_QRCODE_DATA_REG, qrData, length);
-
-            Serial.print("QR Code Data: ");
-            for (uint16_t i = 0; i < length; i++) {
-                Serial.print((char)qrData[i]);
-            }
-            Serial.println();
+    // Check for user input to toggle mode
+    if (Serial.available() > 0) {
+        char command = Serial.read();
+        if (command == 'a') {
+            qrScanner.setMode(true); // Automatic mode
+            Serial.println("Switched to Automatic Mode");
+        } else if (command == 'm') {
+            qrScanner.setMode(false); // Manual mode
+            Serial.println("Switched to Manual Mode");
         }
+    }
+
+    // Read QR code data
+    String qrCode = qrScanner.readQRCode();
+    if (qrCode.length() > 0) {
+        Serial.print("QR Code: ");
+        Serial.println(qrCode);
     }
 
     delay(100);
