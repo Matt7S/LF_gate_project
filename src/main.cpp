@@ -95,7 +95,7 @@ P10Display main_display(LCD_A, LCD_B, LCD_CLK, LCD_DATA, LCD_LATCH, LCD_OE);
 
 QRScanner qrScanner(0x21, BARCODE_SCANNER_SDA, BARCODE_SCANNER_SCL, &Wire); // Adres I2C, SDA, SCL, Wire
 
-uint64_t nrf_interrupt_time = 0;
+uint32_t nrf_interrupt_time = 0;
 
 // Function prototypes
 void handleInterrupt();
@@ -147,21 +147,22 @@ void setup() {
   }
   Serial.println("nRF24L01 initialized!");
 
-  radio.maskIRQ(false, true, true);
+  
 
-  //connectToWiFi();
-  //reconnectToServer();
-  attachInterrupt(digitalPinToInterrupt(BUTTON_YELLOW), handleInterruptYellow, FALLING);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
+  connectToWiFi();
+  reconnectToServer();
+  
 
   qrScanner.begin();
       // Ustawienia radia
   radio.setPALevel(RF24_PA_HIGH);
-  radio.setDataRate(RF24_2MBPS);
+  radio.setDataRate(RF24_1MBPS);
   radio.setChannel(100);
   radio.setRetries(0, 0);
   radio.setAutoAck(false); // Wyłącz automatyczne potwierdzenia dla wszystkich rurek
 
+  attachInterrupt(digitalPinToInterrupt(BUTTON_YELLOW), handleInterruptYellow, FALLING);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
   
 
 
@@ -181,6 +182,7 @@ void setup() {
 void setup1(){
   
   
+  
 }
 
 
@@ -195,45 +197,46 @@ void loop() {
   //Serial.println("welll");
   
 
-  if (black_pressed) {
-    static unsigned long last_time = 0;
-    detachInterrupt(digitalPinToInterrupt(BUTTON_BLACK));
-    if (millis() - last_time > 500) {
-      synchronize_time(transmiter_address, reciever_address);
-
-      last_time = millis();
-      black_pressed = false;
-      attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
-    }
-    
-    
-  }
-  
-
   static unsigned long repeat_rfid = 0;
   if (millis() - repeat_rfid > 500) {
+    digitalWrite(RC_522_SDA, LOW);
     readDataFromRFIDCard();
+    digitalWrite(RC_522_SDA, HIGH);
     repeat_rfid = millis();
   }
+  
+  if (Serial.available() > 0) {
+        String command = Serial.readStringUntil('\n');
+        command.trim(); // Remove any leading/trailing whitespace
 
-  // Check for user input to toggle mode
-    if (Serial.available() > 0) {
-        char command = Serial.read();
-        if (command == 'a') {
+        if (command.equalsIgnoreCase("s")) {
+
+            if (synchronize_time(transmiter_address, reciever_address)) {
+                Serial.println("Time synchronization successful.");
+            } else {
+                Serial.println("Time synchronization failed.");
+            }
+        } else if (command.equalsIgnoreCase("a")) {
             qrScanner.setMode(true); // Automatic mode
             Serial.println("Switched to Automatic Mode");
-        } else if (command == 'm') {
+        } else if (command.equalsIgnoreCase("m")) {
             qrScanner.setMode(false); // Manual mode
             Serial.println("Switched to Manual Mode");
+        } else if (command.equalsIgnoreCase("sss")) {
+            // Example status command
+            Serial.println("System status: OK");
+        } else {
+            Serial.println("Unknown command.");
         }
     }
 
-    // Read QR code data
-    String qrCode = qrScanner.readQRCode(true); // Pass 'true' to filter out corrupted data
-    if (qrCode.length() > 0) {
-        Serial.print("QR Code: ");
-        Serial.println(qrCode);
-    }
+  // Read QR code data
+  String qrCode = qrScanner.readQRCode(true); // Pass 'true' to filter out corrupted data
+  if (qrCode.length() > 0) {
+      Serial.print("QR Code: ");
+      Serial.println(qrCode);
+  }
+    
 
 }
 
@@ -260,7 +263,8 @@ void loop1() {
 
 
 void handleInterrupt() {
-  nrf_interrupt_time = timer_hw->timelr;
+  nrf_interrupt_time = micros();//timer_hw->timelr;
+  Serial.println("NRF24L01 interrupt!");
 }
 
 
@@ -418,89 +422,97 @@ void connectToWiFi() {
 
 
 bool synchronize_time(uint8_t *transmitter_address, uint8_t *receiver_address) {
-    //detachInterrupt(digitalPinToInterrupt(BUTTON_BLACK));
+    
+    
     Serial.println("Synchronizing time...");
-    unsigned long sendData1 = 0;
+    uint32_t sendData1 = 0;
     unsigned long sendData2 = 0;
-    unsigned long receiverTime = 0;
+    uint32_t receiverTime = 0;
     unsigned long roundTripTimeStart = 0;
     unsigned long roundTripTimeEnd = 0;
-    unsigned long roundTripTime = 0;
     int64_t timeDiff = 0;
+    //uint32_t nrf_interrupt_time = 0;
 
     radio.openWritingPipe(receiver_address);
     radio.openReadingPipe(1, transmitter_address);
 
-    // Synchronizacja - wysłanie sygnału "TS"
+    // Send synchronization command
     radio.stopListening();
-    radio.openWritingPipe(reciever_address);
     uint8_t command_synchronize = 0x01;
     if (!radio.write(&command_synchronize, sizeof(command_synchronize))) {
-        Serial.println("Failed to send command TS!");
+        Serial.println("Failed to send synchronization command!");
         return false;
     }
 
-    //Serial.println("Wysłano1, czekanie na potwierdzenie!");
+    // Wait for acknowledgment
     radio.startListening();
+    if (!waitForRadio(2000)) {
+        Serial.println("Failed to receive acknowledgment!");
+        return false;
+    }
+
     uint8_t receivedText = 0;
 
-    if (!waitForRadio(1000)) {
-        Serial.println("Failed to receive OK!");
-        return false;
-    }
-
+    radio.maskIRQ(false, true, true);
+    attachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT), handleInterrupt, FALLING);
     radio.read(&receivedText, sizeof(receivedText));
     if (receivedText != 0x01) {
-        Serial.print("Recieved but not OK(0x01), recieved: ");
+        Serial.print("Received invalid acknowledgment: ");
         Serial.println(receivedText);
+        detachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT));
         return false;
     }
 
+    // Send time for synchronization
     radio.stopListening();
-    radio.openWritingPipe(reciever_address);
-
-    // Wysyłanie czasu
-    radio.maskIRQ(false, true, true);
-    //attachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT), handleInterrupt, FALLING);
-    sendData1 = micros();
-    roundTripTimeStart = micros();
-    if (!radio.write(NULL, 0)) {
-        Serial.println("Failed to send NULL!");
+    delay(1);
+    
+    //sendData1 = micros();
+    
+    if (!radio.write(&roundTripTimeStart, sizeof(roundTripTimeStart))) {
+        Serial.println("Failed to send time data!");
+        detachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT));
         return false;
     }
-    //delay(1);
-    sendData2 = micros();
+    sendData1 = micros();
+    roundTripTimeStart = sendData1;
     //sendData1 = nrf_interrupt_time;
-    //detachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT));
-    //delay(1);
+    detachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT));
+    radio.maskIRQ(true, true, true);
+    
     radio.startListening();
-    if (!waitForRadio(1000)) {
-      Serial.println("Failed to receive synchronization time!");
+    //radio.flush_tx(); // Clear the transmit buffer
+    //radio.flush_rx(); // Clear the receive buffer
+    if (!waitForRadio(2000)) {
+        Serial.println("Failed to receive synchronization time!");
         return false;
     }
     roundTripTimeEnd = micros();
-    // Odbiór czasu z odbiornika
-    radio.read(&receiverTime, sizeof(receiverTime));
-    timeDiff = (int32_t)receiverTime - (int32_t)sendData1;
 
-    // Obsługa różnicy czasu
+    // Receive receiver's time
+    radio.read(&receiverTime, sizeof(receiverTime));
+    timeDiff = (int64_t)receiverTime - (int64_t)nrf_interrupt_time;
+
+    Serial.print(nrf_interrupt_time);
+    Serial.print("\t");
+    Serial.print(receiverTime);
+    Serial.print("\t");
     Serial.print("Receiver is ");
     Serial.print(timeDiff > 0 ? "ahead by " : "behind by ");
     Serial.print(abs(timeDiff));
     Serial.print(" microseconds");
     Serial.print(" (Round trip time: ");
     Serial.print(roundTripTimeEnd - roundTripTimeStart);
+    Serial.println(")");
 
     return true;
 }
 
 bool waitForRadio(unsigned long timeout) {
     unsigned long start_time = micros();
-    while (!radio.available() && micros() - start_time < timeout) {}
+    while (!radio.available() && (micros() - start_time < timeout)) {}
     return radio.available();
 }
-
-
 
 
 
