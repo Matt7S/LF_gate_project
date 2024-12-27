@@ -1,4 +1,6 @@
 #include "QRscanner.hpp"
+#include <Arduino.h>
+#include <Wire.h>
 
 
 QRScanner::QRScanner(uint8_t addr, uint8_t sda, uint8_t scl, TwoWire *wirePort)
@@ -10,6 +12,13 @@ void QRScanner::begin() {
     wire->begin();
     delay(100);
 }
+
+
+bool QRScanner::isConnected() {
+    wire->beginTransmission(i2cAddress);
+    return (wire->endTransmission() == 0);
+}
+
 
 void QRScanner::setMode(bool automatic) {
     uint8_t modeValue = automatic ? AUTOMATIC : MANUAL;

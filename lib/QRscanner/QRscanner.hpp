@@ -19,6 +19,7 @@ private:
     uint8_t sdaPin; ///< SDA pin number.
     uint8_t sclPin; ///< SCL pin number.
     TwoWire *wire; ///< Pointer to the TwoWire instance.
+    bool connected;
 
     /**
      * @brief Enumeration for the scanning mode.
@@ -63,6 +64,13 @@ public:
      * @brief Initializes the QR scanner by setting up the I2C communication.
      */
     void begin();
+
+    /**
+     * @brief Checks if the QR scanner is connected and responding.
+     * 
+     * @return True if the scanner is connected; false otherwise.
+     */
+    bool isConnected();
 
     /**
      * @brief Sets the mode of the QR scanner.

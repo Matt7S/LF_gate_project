@@ -6,9 +6,6 @@
 
 
 
-
-
-
 class P10Display {
 private:
     // Numery pinów
@@ -63,6 +60,10 @@ public:
      * @param output Opowiednio ustawione piksele timera 5x32
      */
     void default_timer_screen(uint16_t refresh_time_ms, uint8_t counter_m, uint8_t counter_s, uint8_t counter_ms);
+
+    void drawStaticText(const char* text, uint8_t x, uint8_t y);
+    void scrollText(const char* text, uint8_t y, uint16_t scroll_speed_ms);
+    
 };
 
 #endif // P10_DRIVER_HPP

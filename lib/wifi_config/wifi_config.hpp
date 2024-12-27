@@ -2,9 +2,16 @@
 #define WIFI_CONFIG_HPP
 
 #include <Arduino.h>
+#include <WiFi.h>
 
-// Konfiguracja WiFi
-const char* WIFI_SSID = "605a_lab";
-const char* WIFI_PASSWORD = "ElektroSzmelcMateusza7!";
+
+
+
+
+void checkConnection();
+bool connectToWiFi();
+bool reconnectWiFi();
+bool resolveServerIP();
+bool connectToServer();
 
 #endif // WIFI_CONFIG_HPP

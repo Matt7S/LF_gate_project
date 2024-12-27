@@ -1,18 +1,21 @@
 #include <Arduino.h>
-#include <WiFi.h> // WiFi library for Pico W
 #include <SPI.h>
+
 #include <Freenove_RFID_Lib_for_Pico.h>
 #include <FirebaseJson.h>
-#include "fonts.hpp"
-#include "wifi_config.hpp"
-#include "P10Display.hpp"
 #include <RF24.h>
 #include <nRF24L01.h>
 #include <Wire.h>
 #include <QRScanner.hpp>
-#include "hardware/timer.h"
+
+#include "wifi_config.hpp"
+#include "P10Display.hpp"
+#include "main.hpp"
+
+#define GATE_SERIAL_NUMBER 1
 
 
+#define BARCODE_SCANNER_PRESENT_PIN 0
 // Define pins for SPI
 #define SPI0_PIN_SCK 2
 #define SPI0_PIN_MOSI 3
@@ -48,21 +51,26 @@
 #define LCD_DATA 21   // Serial data input
 
 
+enum Role { RECEIVER, TRANSMITTER };
+Role currentRole = RECEIVER;
 
-
-
-// Define gate type
 String gate_type = "START"; // Hostname of the server
-//char *gate_type = "END";
-
-// Define addresses for NRF24L01
 uint8_t transmiter_address[6] = "Gat00";
 uint8_t reciever_address[6] = "Gat01";
 
+
+
 // Create radio object
-RF24 radio(NRF_CE, NRF_CSN); // CE, CSN
+extern WiFiClient client; // TCP client object\
 
 
+RF24 radio(NRF_CE, NRF_CSN);
+RFID rfid(RC_522_SDA, RC_522_RST);  
+QRScanner qr(0x21, BARCODE_SCANNER_SDA, BARCODE_SCANNER_SCL, &Wire); // Adres I2C, SDA, SCL, Wire
+P10Display display(LCD_A, LCD_B, LCD_CLK, LCD_DATA, LCD_LATCH, LCD_OE);
+
+
+//
 volatile bool black_pressed = false;
 volatile bool yellow_pressed = false;
 volatile bool nr24_interrupt = false;
@@ -74,101 +82,69 @@ volatile int counter_ms = 0; // Milisekundy
 
 // Button debounce time
 static int BUTTON_SKIP_TIME = 500; // Debounce time for buttons
-static unsigned long BUTTON_YELLOW_TIME = 200;
-static unsigned long BUTTON_BLACK_TIME = 200;
 
-// WiFi and server variables
-const char* serverHostname = "pigate.local"; // Hostname of the server
-IPAddress serverIP;                          // Store resolved IP
-const int serverPort = 1234;                 // Replace with your server's port number
-WiFiClient client; // TCP client object
-
-
-// RFID variables
-RFID rfid(RC_522_SDA, RC_522_RST);   
-unsigned char status;
-unsigned char str[MAX_LEN];  //MAX_LEN is 16, the maximum length of the array
-static unsigned long replay_time = 0;
-
-// Display object
-P10Display main_display(LCD_A, LCD_B, LCD_CLK, LCD_DATA, LCD_LATCH, LCD_OE);
-
-QRScanner qrScanner(0x21, BARCODE_SCANNER_SDA, BARCODE_SCANNER_SCL, &Wire); // Adres I2C, SDA, SCL, Wire
-
-uint32_t nrf_interrupt_time = 0;
-
-// Function prototypes
-void handleInterrupt();
-void handleInterruptYellow();
-void handleInterruptBlack();
-void updateTime();
-void handleButtonPress(int buttonPin, const String& message, unsigned long& lastPressTime);
-void handleServerResponse();
-
-void connectToWiFi();
-void reconnectWiFi();
-void reconnectToServer();
-void checkAndReconnectWiFi();
-void checkAndReconnectToSerwer();
-void readDataFromRFIDCard();
-bool synchronize_time(uint8_t *transmiter_address, uint8_t *reciever_address);
-bool waitForRadio(unsigned long timeout);
-
-
+// Global variable to store interrupt time and interrupt source
+volatile bool NRF_interrupt = false;
+volatile uint32_t NRF_interrupt_time = 0;
+volatile bool QRScanner_present = false;
 
 
 
 void setup() {
-  delay(2000);
-  Serial.begin(115200);
+    delay(2000);
+    Serial.begin(115200);
+    
+    Serial.println(gate_type);
+    SPI.setSCK(SPI0_PIN_SCK);
+    SPI.setTX(SPI0_PIN_MOSI);
+    SPI.setRX(SPI0_PIN_MISO);
+    SPI.begin();
+
+    pinMode(BUTTON_YELLOW, INPUT_PULLUP);
+    pinMode(BUTTON_BLACK, INPUT_PULLUP); 
+    pinMode(LED_GREEN, OUTPUT);
+    pinMode(LED_RED, OUTPUT);
+    pinMode(BARCODE_SCANNER_PRESENT_PIN, INPUT_PULLUP);
+    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_RED, LOW);
+
+    QRScanner_present = digitalRead(BARCODE_SCANNER_PRESENT_PIN) == HIGH;
+
+
+    rfid.init();
+    radio.begin();
+
+    if (QRScanner_present) {
+        qr.begin();
+        Serial.println("QR scanner is present");
+    }
+
+    
+
+    connectToWiFi();
+    resolveServerIP();
+    connectToServer();
+    FirebaseJson data;
+    data.set("serial_number", GATE_SERIAL_NUMBER);
+    sendJsonMessage("GATE_HELLO", data);
+    while (!client.available()) {
+        Serial.println("Waiting for serwer response...");
+        delay(1000);
+    }
   
+   // Ustawienia radia
+    radio.setPALevel(RF24_PA_HIGH);
+    radio.setDataRate(RF24_1MBPS);
+    radio.setChannel(100);
+    radio.setRetries(15, 15);
+    radio.setAutoAck(true); // Wyłącz automatyczne potwierdzenia dla wszystkich rurek
+    // Enable interrupt for NRF module
+    radio.maskIRQ(true, true, false);
+
+    attachInterrupt(digitalPinToInterrupt(BUTTON_YELLOW), handleInterruptYellow, FALLING);
+    attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
+    attachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT), handleInterrupt, FALLING);
   
-  Serial.println(gate_type);
-  SPI.setSCK(SPI0_PIN_SCK);
-  SPI.setTX(SPI0_PIN_MOSI);
-  SPI.setRX(SPI0_PIN_MISO);
-  SPI.begin();
-
-  pinMode(BUTTON_YELLOW, INPUT_PULLUP);
-  pinMode(BUTTON_BLACK, INPUT_PULLUP); 
-  pinMode(LED_GREEN, OUTPUT);
-  pinMode(LED_RED, OUTPUT);
-
-  digitalWrite(LED_GREEN, HIGH);
-  digitalWrite(LED_RED, LOW);
-
-  rfid.init(); //initialization
-  //radio.begin();
-
-  
-  while (!radio.begin()) {
-    Serial.println("nRF24L01 initialization failed!");
-    delay(1000);
-  }
-  Serial.println("nRF24L01 initialized!");
-
-  
-
-  connectToWiFi();
-  reconnectToServer();
-  
-
-  qrScanner.begin();
-      // Ustawienia radia
-  radio.setPALevel(RF24_PA_HIGH);
-  radio.setDataRate(RF24_1MBPS);
-  radio.setChannel(100);
-  radio.setRetries(0, 0);
-  radio.setAutoAck(false); // Wyłącz automatyczne potwierdzenia dla wszystkich rurek
-
-  attachInterrupt(digitalPinToInterrupt(BUTTON_YELLOW), handleInterruptYellow, FALLING);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
-  
-
-
-
-
-
 }
 
 
@@ -189,14 +165,35 @@ void setup1(){
 //                                                                                                       LOOP 0
 
 void loop() {
-  //checkAndReconnectWiFi();
-  //checkAndReconnectToSerwer();
-  //handleButtonPress(BUTTON_YELLOW, "ON", BUTTON_YELLOW_TIME);
-  //handleButtonPress(BUTTON_BLACK, "OFF", BUTTON_BLACK_TIME);
-  //handleServerResponse();
-  //Serial.println("welll");
-  
+  checkConnection();
+  handleServerResponse();
 
+
+  if (Serial.available()) {
+        char key = Serial.read();
+        FirebaseJson data;
+
+        switch (key) {
+            case '1':
+                data.set("message", "Predefiniowana wiadomosc 1");
+                sendJsonMessage("GET_SETTINGS", data);
+                break;
+            case '2':
+                data.set("message", "Predefiniowana wiadomosc 2");
+                sendJsonMessage("GET_USER", data);
+                break;
+            case '3':
+                data.set("message", "Predefiniowana wiadomosc 3");
+                sendJsonMessage("GET_ROBOT", data);
+                break;
+            default:
+                Serial.println("Nieznany klawisz. Uzyj 1, 2 lub 3.");
+                break;
+        }
+    }
+
+
+  
   static unsigned long repeat_rfid = 0;
   if (millis() - repeat_rfid > 500) {
     digitalWrite(RC_522_SDA, LOW);
@@ -205,39 +202,15 @@ void loop() {
     repeat_rfid = millis();
   }
   
-  if (Serial.available() > 0) {
-        String command = Serial.readStringUntil('\n');
-        command.trim(); // Remove any leading/trailing whitespace
-
-        if (command.equalsIgnoreCase("s")) {
-
-            if (synchronize_time(transmiter_address, reciever_address)) {
-                Serial.println("Time synchronization successful.");
-            } else {
-                Serial.println("Time synchronization failed.");
-            }
-        } else if (command.equalsIgnoreCase("a")) {
-            qrScanner.setMode(true); // Automatic mode
-            Serial.println("Switched to Automatic Mode");
-        } else if (command.equalsIgnoreCase("m")) {
-            qrScanner.setMode(false); // Manual mode
-            Serial.println("Switched to Manual Mode");
-        } else if (command.equalsIgnoreCase("sss")) {
-            // Example status command
-            Serial.println("System status: OK");
-        } else {
-            Serial.println("Unknown command.");
-        }
-    }
 
   // Read QR code data
-  String qrCode = qrScanner.readQRCode(true); // Pass 'true' to filter out corrupted data
-  if (qrCode.length() > 0) {
+  if (QRScanner_present) {
+    String qrCode = qr.readQRCode(true); // Pass 'true' to filter out corrupted data
+    if (qrCode.length() > 0) {
       Serial.print("QR Code: ");
       Serial.println(qrCode);
+    }
   }
-    
-
 }
 
 
@@ -248,8 +221,12 @@ void loop() {
 
 void loop1() {
   updateTime();
-  main_display.default_timer_screen(66, counter_m, counter_s, counter_ms);
-  main_display.refresh();
+  display.default_timer_screen(66, counter_m, counter_s, counter_ms);
+  
+  //display.drawStaticText("Static", 0, 0); // Wyświetl "Static" od pozycji (5, 4)
+  display.scrollText("Line Follower Standard!", 8, 25); // Przewijanie od linii 8 z prędkością 100 ms
+
+  display.refresh();
 }
 
 
@@ -263,8 +240,8 @@ void loop1() {
 
 
 void handleInterrupt() {
-  nrf_interrupt_time = micros();//timer_hw->timelr;
-  Serial.println("NRF24L01 interrupt!");
+  NRF_interrupt_time = micros();
+  //Serial.println("NRF24L01 interrupt!");
 }
 
 
@@ -296,73 +273,14 @@ void updateTime() {
 
 
 
-void handleButtonPress(int buttonPin, const String& message, unsigned long& lastPressTime) {
-  if ((millis() - lastPressTime) > BUTTON_SKIP_TIME && digitalRead(buttonPin) == LOW) {
-    client.println(message); // Send data
-    Serial.print("Sent: ");
-    Serial.println(message);
-    lastPressTime = millis();
-    replay_time = micros();
-    
-  }
-}
-
-void handleServerResponse() {
-  while (client.available()) {
-
-    String response = client.readStringUntil('\n');
-    response.trim(); // Remove newline and whitespace
-    Serial.println(micros() - replay_time);
-    replay_time = 0;
-    Serial.print("Received: ");
-    Serial.println(response);
-    if (response == "ON") {
-      digitalWrite(LED_GREEN, LOW);  // Turn green LED ON
-      digitalWrite(LED_RED, HIGH);  // Turn red LED OFF
-    } else if (response == "OFF") {
-      digitalWrite(LED_GREEN, HIGH); // Turn green LED OFF
-      digitalWrite(LED_RED, LOW);    // Turn red LED ON
-    }
-  }
-}
-
-void reconnectWiFi() {
-  Serial.println("Connecting to WiFi...");
-  WiFi.disconnect();
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print("Retrying...");
-  }
-  Serial.println("\nConnected to WiFi!");
-}
-
-void reconnectToServer() {
-  Serial.println("Connecting to the server...");
-  while (!client.connect(serverIP, serverPort)) {
-    delay(1000);
-    Serial.println("Retrying...");
-  }
-  Serial.println("Connected to the server!");
-}
 
 
-void checkAndReconnectWiFi() {
-  if (WiFi.status() != WL_CONNECTED) {
-    reconnectWiFi();
-  }
-}
-
-void checkAndReconnectToSerwer() {
-if (!client.connected()) {
-    reconnectToServer();
-  }
-
-}
 
 
 
 void readDataFromRFIDCard() {
+  static unsigned char status;
+  static unsigned char str[MAX_LEN];  //MAX_LEN is 16, the maximum length of the array
   // Search card, return card types
   if (rfid.findCard(PICC_REQIDL, str) == MI_OK) {
     Serial.println("Find the card!");
@@ -378,143 +296,269 @@ void readDataFromRFIDCard() {
     // Card selection
     rfid.selectTag(str);
   }
+
+
   rfid.halt(); // Command the card to enter sleep mode
 }
 
 
 
-void connectToWiFi() {
-  // Connect to WiFi
-  Serial.print("Connecting to WiFi...");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    digitalWrite(LED_GREEN, LOW);
-    digitalWrite(LED_RED, HIGH);
-    Serial.print(".");
-  }
 
+void sendJsonMessage(const char* command, FirebaseJson& data) {
+    if (client.connected()) {
+        FirebaseJson json;
+        json.set("co", command);
+        json.set("da", data);
 
-  Serial.println("\nConnected to WiFi!");
-  digitalWrite(LED_GREEN, LOW);
-  digitalWrite(LED_RED, HIGH);
+        String jsonString;
+        json.toString(jsonString, true);
+        jsonString += "\n"; // Dodaj separator wiadomości
+        client.print(jsonString);
 
-  Serial.print("Device IP Address: ");
-  Serial.println(WiFi.localIP());
+        Serial.print("Wyslano JSON: ");
+        Serial.println(jsonString);
+    } else {
+        Serial.println("Brak polaczenia z serwerem. Nie mozna wyslac JSON-a.");
+    }
+}
 
-  // Resolve server hostname to IP address
-  if (WiFi.hostByName(serverHostname, serverIP)) {
-    Serial.print("Resolved IP Address of ");
-    Serial.print(serverHostname);
-    Serial.print(": ");
-    Serial.println(serverIP);
-  } else {
-    Serial.println("Hostname resolution failed!");
-    delay(1000); // Stop if resolution fails
-    WiFi.hostByName(serverHostname, serverIP);
-    Serial.print("Resolved IP Address of ");
-    Serial.print(serverHostname);
-    Serial.print(": ");
-    Serial.println(serverIP);
-  }
+void handleServerResponse() {
+    while (client.available()) {
+        FirebaseJson responseJson;
+        FirebaseJsonData jsonData;
+        String command;
+
+        // Odczytaj odpowiedź jako linię
+        String response = client.readStringUntil('\n');
+        response.trim(); 
+        Serial.print("Otrzymano od serwera: ");
+        Serial.println(response);
+
+        // Sprawdź, czy odpowiedź to poprawny JSON
+        if (!responseJson.setJsonData(response)) {
+            Serial.println("Nieprawidlowy format JSON w odpowiedzi serwera.");
+            continue; // Pomijamy tę iterację pętli
+        }
+
+        // Przypisanie początkowych danych ("co" i "da")
+        if (!responseJson.get(jsonData, "co")) {
+            Serial.println("Brak komendy w odpowiedzi.");
+            continue;
+        }
+        command = jsonData.stringValue;
+
+        FirebaseJson daJson;
+        if (responseJson.get(jsonData, "da")) {
+            daJson = FirebaseJson();
+            daJson.setJsonData(jsonData.stringValue);
+        } else {
+            Serial.println("Brak danych 'da' w odpowiedzi.");
+            continue;
+        }
+
+        Serial.print("Komenda: ");
+        Serial.println(command);
+
+        if (command == "CUSTOM_MESSAGE") {
+            String response;
+            if (daJson.get(jsonData, "response")) {
+                response = jsonData.stringValue;
+                Serial.print("Dane CUSTOM_MESSAGE: ");
+                Serial.println(response);
+            }
+        } else if (command == "ROBOT_INFO") {
+            String status;
+            if (daJson.get(jsonData, "status")) {
+                status = jsonData.stringValue;
+                Serial.print("Status robota: ");
+                Serial.println(status);
+            }
+        } else if (command == "GET_SETTINGS") {
+            // Deklaracja zmiennych
+            int gateID = 0;
+            String gateType;
+            int groupID = 0;
+            int categoryID = 0;
+            String gateNrfStartAddress;
+            String gateNrfEndAddress;
+            bool requiredUserCard = false;
+            bool requiredUserQrCode = false;
+            bool requiredConfirmation = false;
+
+            // Pobieranie danych z JSON-a
+            if (daJson.get(jsonData, "gateID")) {
+                gateID = jsonData.intValue;
+            }
+            if (daJson.get(jsonData, "gateType")) {
+                gateType = jsonData.stringValue;
+            }
+            if (daJson.get(jsonData, "groupID")) {
+                groupID = jsonData.intValue;
+            }
+            if (daJson.get(jsonData, "categoryID")) {
+                categoryID = jsonData.intValue;
+            }
+            if (daJson.get(jsonData, "gateNrfStartAddress")) {
+                gateNrfStartAddress = jsonData.stringValue;
+            }
+            if (daJson.get(jsonData, "gateNrfEndAddress")) {
+                gateNrfEndAddress = jsonData.stringValue;
+            }
+            if (daJson.get(jsonData, "requiredUserCard")) {
+                requiredUserCard = jsonData.boolValue;
+            }
+            if (daJson.get(jsonData, "requiredUserQrCode")) {
+                requiredUserQrCode = jsonData.boolValue;
+            }
+            if (daJson.get(jsonData, "requiredConfirmation")) {
+                requiredConfirmation = jsonData.boolValue;
+            }
+
+            // Wyświetlanie ustawień
+            Serial.println("Ustawienia:");
+            Serial.print("gateID: "); Serial.println(gateID);
+            Serial.print("gateType: "); Serial.println(gateType);
+            Serial.print("groupID: "); Serial.println(groupID);
+            Serial.print("categoryID: "); Serial.println(categoryID);
+            Serial.print("gateNrfStartAddress: "); Serial.println(gateNrfStartAddress);
+            Serial.print("gateNrfEndAddress: "); Serial.println(gateNrfEndAddress);
+            Serial.print("requiredUserCard: "); Serial.println(requiredUserCard);
+            Serial.print("requiredUserQrCode: "); Serial.println(requiredUserQrCode);
+            Serial.print("requiredConfirmation: "); Serial.println(requiredConfirmation);
+
+        } else if (command == "ERROR") {
+            String errorMsg;
+            if (daJson.get(jsonData, "error")) {
+                errorMsg = jsonData.stringValue;
+                Serial.print("Blad: ");
+                Serial.println(errorMsg);
+            }
+        }
+    }
 }
 
 
 
-bool synchronize_time(uint8_t *transmitter_address, uint8_t *receiver_address) {
-    
-    
-    Serial.println("Synchronizing time...");
-    uint32_t sendData1 = 0;
-    unsigned long sendData2 = 0;
-    uint32_t receiverTime = 0;
+void setRole(Role role) {
+    currentRole = role;
+    if (role == RECEIVER) {
+        radio.openWritingPipe(reciever_address);
+        radio.openReadingPipe(1, transmiter_address);
+        radio.startListening();
+        Serial.println("Role set to RECEIVER");
+    } else if (role == TRANSMITTER) {
+        radio.openWritingPipe(transmiter_address);
+        radio.openReadingPipe(1, reciever_address);
+        radio.stopListening();
+        Serial.println("Role set to TRANSMITTER");
+    }
+}
+
+
+void listenForSignals() {
+  // Odbierz dane
+  if (radio.available()) {
+    uint8_t receivedCommand = 0;
+    uint32_t recievedTime = NRF_interrupt_time;
+
+    radio.stopListening();
+    radio.read(&receivedCommand, sizeof(receivedCommand));
+
+    switch (receivedCommand) {
+        case 0x01: // Assuming 0x01 represents "TS"
+            if (recievedTime == 0) {
+                Serial.println("No time received by interrupt??");
+                break;
+            }
+            synchronize_time_receiver(transmiter_address, reciever_address, recievedTime);
+            break;    
+
+        default:  
+            break;
+    }
+    radio.maskIRQ(true, true, false);
+    radio.startListening();
+
+  }
+}
+
+
+bool synchronize_time_transmitter(uint8_t *transmitter_address, uint8_t *receiver_address) {
+    unsigned long transmitterTimeInterrupt = 0;
+    unsigned long transmitterTime = micros();
+    unsigned long receiverTime = 0;
     unsigned long roundTripTimeStart = 0;
     unsigned long roundTripTimeEnd = 0;
-    int64_t timeDiff = 0;
-    //uint32_t nrf_interrupt_time = 0;
-
-    radio.openWritingPipe(receiver_address);
-    radio.openReadingPipe(1, transmitter_address);
-
-    // Send synchronization command
-    radio.stopListening();
-    uint8_t command_synchronize = 0x01;
-    if (!radio.write(&command_synchronize, sizeof(command_synchronize))) {
-        Serial.println("Failed to send synchronization command!");
-        return false;
-    }
-
-    // Wait for acknowledgment
-    radio.startListening();
-    if (!waitForRadio(2000)) {
-        Serial.println("Failed to receive acknowledgment!");
-        return false;
-    }
-
-    uint8_t receivedText = 0;
+    unsigned long roundTripTime = 0;
 
     radio.maskIRQ(false, true, true);
-    attachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT), handleInterrupt, FALLING);
-    radio.read(&receivedText, sizeof(receivedText));
-    if (receivedText != 0x01) {
-        Serial.print("Received invalid acknowledgment: ");
-        Serial.println(receivedText);
-        detachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT));
-        return false;
-    }
-
-    // Send time for synchronization
     radio.stopListening();
-    delay(1);
     
-    //sendData1 = micros();
     
-    if (!radio.write(&roundTripTimeStart, sizeof(roundTripTimeStart))) {
-        Serial.println("Failed to send time data!");
-        detachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT));
+    // Send synchronization command ("TS")
+    uint8_t command_synchronize = 0x01; // Assuming 0x01 represents "TS"
+    if (!radio.write(&command_synchronize, sizeof(command_synchronize))) {
+        Serial.println("Failed to send synchronization command.");
         return false;
     }
-    sendData1 = micros();
-    roundTripTimeStart = sendData1;
-    //sendData1 = nrf_interrupt_time;
-    detachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT));
-    radio.maskIRQ(true, true, true);
-    
+    transmitterTimeInterrupt = NRF_interrupt_time;
+    NRF_interrupt = false;
+
+    if (transmitterTime > transmitterTimeInterrupt) {
+        Serial.println("NOT VALID INTERRUPT.");
+        return false;
+    }
+
+    // Start listening for the response
+    radio.maskIRQ(true, true, false);
     radio.startListening();
-    //radio.flush_tx(); // Clear the transmit buffer
-    //radio.flush_rx(); // Clear the receive buffer
-    if (!waitForRadio(2000)) {
-        Serial.println("Failed to receive synchronization time!");
+    
+    waitForRadio(50000);
+    roundTripTimeEnd = NRF_interrupt_time;
+
+    // Read the receiver's time
+    if (radio.available()) {
+        radio.read(&receiverTime, sizeof(receiverTime));
+        long timeDiff = (long)receiverTime - (long)transmitterTimeInterrupt;
+        roundTripTimeStart = transmitterTimeInterrupt;
+        Serial.print("Transmitter time: \t");
+        Serial.print(transmitterTimeInterrupt);
+        Serial.print("\tReceiver time: \t");
+        Serial.print(receiverTime);
+        Serial.print("\tTime difference: \t");
+        Serial.print(timeDiff);
+        Serial.print("\tRound trip time: \t");
+        Serial.println(roundTripTimeEnd - roundTripTimeStart-10000);
+    } else {
+        Serial.println("No data available.");
         return false;
     }
-    roundTripTimeEnd = micros();
-
-    // Receive receiver's time
-    radio.read(&receiverTime, sizeof(receiverTime));
-    timeDiff = (int64_t)receiverTime - (int64_t)nrf_interrupt_time;
-
-    Serial.print(nrf_interrupt_time);
-    Serial.print("\t");
-    Serial.print(receiverTime);
-    Serial.print("\t");
-    Serial.print("Receiver is ");
-    Serial.print(timeDiff > 0 ? "ahead by " : "behind by ");
-    Serial.print(abs(timeDiff));
-    Serial.print(" microseconds");
-    Serial.print(" (Round trip time: ");
-    Serial.print(roundTripTimeEnd - roundTripTimeStart);
-    Serial.println(")");
 
     return true;
 }
 
-bool waitForRadio(unsigned long timeout) {
-    unsigned long start_time = micros();
-    while (!radio.available() && (micros() - start_time < timeout)) {}
-    return radio.available();
+bool synchronize_time_receiver(uint8_t *transmitter_address, uint8_t *receiver_address, uint32_t last_received_interrupt_time) {
+  uint32_t synchro_time = last_received_interrupt_time;
+  radio.flush_tx();
+  delayMicroseconds(10000);
+  
+  if (!radio.write(&synchro_time, sizeof(synchro_time))) {
+    Serial.println("Failed to send current time.");
+    return false;
+  }
+  else {  
+    Serial.print("Time sent successfully.\n");
+    Serial.println(synchro_time);
+    return true;
+  }
 }
 
 
 
-
+bool waitForRadio(unsigned long timeout) {
+  unsigned long start_time = micros();
+  while (!NRF_interrupt && (micros() - start_time < timeout)) {}
+  NRF_interrupt = false;
+  return true;
+}
 

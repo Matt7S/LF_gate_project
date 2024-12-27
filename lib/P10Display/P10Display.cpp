@@ -1,4 +1,5 @@
 #include "P10Display.hpp"
+#include "fonts.hpp"
 
 // Tablica cyfr i separatora ":"
 byte digits[10][5][3] = {
@@ -153,4 +154,78 @@ void P10Display::default_timer_screen(uint16_t refresh_time_ms, uint8_t counter_
     }
     last_refresh = millis();
   }
+}
+
+
+void P10Display::drawStaticText(const char* text, uint8_t x, uint8_t y) {
+    // Czyszczenie obszaru docelowego w buforze
+    for (int i = y; i < y + 8 && i < 16; i++) { // Wysokość tekstu ograniczona do 8 pikseli
+        for (int j = x; j < x + 32 && j < 32; j++) {
+            user_buffer[i][j] = 0; // Czyszczenie odpowiednich pikseli
+        }
+    }
+
+    // Rysowanie tekstu
+    int xOffset = x;
+    for (int i = 0; text[i] != '\0'; i++) {
+        char c = text[i];
+        if (c < 32 || c > 126) continue; // Ignoruj znaki poza zakresem ASCII
+
+        const tChar* charInfo = Arial10_c.chars + (c - 32);
+        for (uint8_t row = 0; row < charInfo->image->height; row++) {
+            uint8_t rowData = charInfo->image->data[charInfo->image->height - 1 - row];
+            for (uint8_t col = 0; col < charInfo->image->width; col++) {
+                if (xOffset + col < 32 && y + row < 16) { // Sprawdzenie granic ekranu
+                    user_buffer[y + row][xOffset + col] = (rowData >> (7 - col)) & 0x01;
+                }
+            }
+        }
+        xOffset += charInfo->image->width + 1; // Przesunięcie na kolejny znak
+        if (xOffset >= 32) break; // Jeśli tekst wykracza poza ekran, przerwij
+    }
+}
+
+
+
+void P10Display::scrollText(const char* text, uint8_t y, uint16_t scroll_speed_ms) {
+    static uint64_t last_scroll_time = 0;
+    static int scroll_offset = 0;
+
+    // Obliczenie szerokości tekstu
+    int textWidth = 0;
+    for (int i = 0; text[i] != '\0'; i++) {
+        const tChar* charInfo = Arial10_c.chars + (text[i] - 32);
+        textWidth += charInfo->image->width + 1; // Szerokość znaku + odstęp
+    }
+
+    // Czyszczenie odpowiednich linii
+    for (int i = y; i < y + 8 && i < 16; i++) {
+        for (int j = 0; j < 32; j++) {
+            user_buffer[i][j] = 0;
+        }
+    }
+
+    // Rysowanie przewijanego tekstu
+    for (int i = 0, xOffset = -scroll_offset; text[i] != '\0'; i++) {
+        const tChar* charInfo = Arial10_c.chars + (text[i] - 32);
+        for (uint8_t row = 0; row < charInfo->image->height; row++) {
+            uint8_t rowData = charInfo->image->data[charInfo->image->height - 1 - row];
+            for (uint8_t col = 0; col < charInfo->image->width; col++) {
+                int screenX = xOffset + col;
+                if (screenX >= 0 && screenX < 32 && y + row < 16) {
+                    user_buffer[y + row][screenX] = (rowData >> (7 - col)) & 0x01;
+                }
+            }
+        }
+        xOffset += charInfo->image->width + 1; // Przesunięcie na kolejny znak
+    }
+
+    // Aktualizacja scrollowania
+    if (millis() - last_scroll_time > scroll_speed_ms) {
+        scroll_offset++;
+        if (scroll_offset > textWidth) {
+            scroll_offset = -32; // Reset przewijania
+        }
+        last_scroll_time = millis();
+    }
 }
