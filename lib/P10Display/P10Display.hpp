@@ -62,7 +62,14 @@ public:
     void default_timer_screen(uint16_t refresh_time_ms, uint8_t counter_m, uint8_t counter_s, uint8_t counter_ms);
 
     void drawStaticText(const char* text, uint8_t x, uint8_t y);
-    void scrollText(const char* text, uint8_t y, uint16_t scroll_speed_ms);
+    void drawStaticText(String text, uint8_t x, uint8_t y);
+
+    void scrollLine1(const char* text, uint8_t y, uint16_t scroll_speed_ms);
+    void scrollLine1(String text, uint8_t y, uint16_t scroll_speed_ms);
+
+    void scrollLine2(const char* text, uint8_t y, uint16_t scroll_speed_ms);
+    void scrollLine2(String text, uint8_t y, uint16_t scroll_speed_ms);
+
     
 };
 

@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "*.py": "python",
+        "system_error": "cpp",
+        "*.tcc": "cpp",
+        "ostream": "cpp",
+        "sstream": "cpp",
+        "regex": "cpp",
+        "string": "cpp"
+    }
+}

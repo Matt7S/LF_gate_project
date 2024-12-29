@@ -187,9 +187,17 @@ void P10Display::drawStaticText(const char* text, uint8_t x, uint8_t y) {
 
 
 
-void P10Display::scrollText(const char* text, uint8_t y, uint16_t scroll_speed_ms) {
+void P10Display::scrollLine1(const char* text, uint8_t y, uint16_t scroll_speed_ms) {
     static uint64_t last_scroll_time = 0;
     static int scroll_offset = 0;
+
+    static String last_text = ""; // Przechowuje ostatni tekst
+
+    // Sprawdzenie, czy tekst się zmienił
+    if (last_text != text) {
+        last_text = text; // Aktualizacja ostatniego tekstu
+        scroll_offset = 0; // Resetowanie przesunięcia
+    }
 
     // Obliczenie szerokości tekstu
     int textWidth = 0;
@@ -228,4 +236,72 @@ void P10Display::scrollText(const char* text, uint8_t y, uint16_t scroll_speed_m
         }
         last_scroll_time = millis();
     }
+}
+
+
+void P10Display::scrollLine2(const char* text, uint8_t y, uint16_t scroll_speed_ms) {
+    static uint64_t last_scroll_time = 0;
+    static int scroll_offset = 0;
+
+    static String last_text = ""; // Przechowuje ostatni tekst
+
+    if (last_text != text) {
+        last_text = text; // Aktualizacja ostatniego tekstu
+        scroll_offset = 0; // Resetowanie przesunięcia
+    }
+
+    // Obliczenie szerokości tekstu
+    int textWidth = 0;
+    for (int i = 0; text[i] != '\0'; i++) {
+        const tChar* charInfo = Arial10_c.chars + (text[i] - 32);
+        textWidth += charInfo->image->width + 1; // Szerokość znaku + odstęp
+    }
+
+    // Czyszczenie odpowiednich linii
+    for (int i = y; i < y + 8 && i < 16; i++) {
+        for (int j = 0; j < 32; j++) {
+            user_buffer[i][j] = 0;
+        }
+    }
+
+    // Rysowanie przewijanego tekstu
+    for (int i = 0, xOffset = -scroll_offset; text[i] != '\0'; i++) {
+        const tChar* charInfo = Arial10_c.chars + (text[i] - 32);
+        for (uint8_t row = 0; row < charInfo->image->height; row++) {
+            uint8_t rowData = charInfo->image->data[charInfo->image->height - 1 - row];
+            for (uint8_t col = 0; col < charInfo->image->width; col++) {
+                int screenX = xOffset + col;
+                if (screenX >= 0 && screenX < 32 && y + row < 16) {
+                    user_buffer[y + row][screenX] = (rowData >> (7 - col)) & 0x01;
+                }
+            }
+        }
+        xOffset += charInfo->image->width + 1; // Przesunięcie na kolejny znak
+    }
+
+    // Aktualizacja scrollowania
+    if (millis() - last_scroll_time > scroll_speed_ms) {
+        scroll_offset++;
+        if (scroll_offset > textWidth) {
+            scroll_offset = -32; // Reset przewijania
+        }
+        last_scroll_time = millis();
+    }
+}
+
+
+
+
+void P10Display::drawStaticText(String text, uint8_t x, uint8_t y) {
+    drawStaticText((char*)text.c_str(), x, y);
+}
+
+
+void P10Display::scrollLine1(String text, uint8_t y, uint16_t scroll_speed_ms) {
+    scrollLine1((char*)text.c_str(), y, scroll_speed_ms);
+}
+
+
+void P10Display::scrollLine2(String text, uint8_t y, uint16_t scroll_speed_ms) {
+    scrollLine2((char*)text.c_str(), y, scroll_speed_ms);
 }

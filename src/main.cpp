@@ -51,12 +51,11 @@
 #define LCD_DATA 21   // Serial data input
 
 
-enum Role { RECEIVER, TRANSMITTER };
-Role currentRole = RECEIVER;
 
-String gate_type = "START"; // Hostname of the server
-uint8_t transmiter_address[6] = "Gat00";
-uint8_t reciever_address[6] = "Gat01";
+struct Data_Package {
+    uint8_t command;
+    uint32_t time;
+};
 
 
 
@@ -88,16 +87,42 @@ volatile bool NRF_interrupt = false;
 volatile uint32_t NRF_interrupt_time = 0;
 volatile bool QRScanner_present = false;
 
+volatile bool scrollable_line1 = 1;
+volatile bool scrollable_line2 = 0;
+
+String screen_line1 = "Welcome to Line Follower Measurement System";
+String screen_line2 = "STARTING!";
+
+//uint8_t transmiter_address[6] = "Gat00";
+//uint8_t reciever_address[6] = "Gat01";
+
+int gateID = 0;
+String gateType;
+int groupID = 0;
+int categoryID = 0;
+uint8_t gateNrfStartAddress[6];
+uint8_t gateNrfFinishAddress[6];
+bool isFinal = false;
+bool requiredUserCard = false;
+bool requiredUserQrCode = false;
+bool requiredConfirmation = false;
+String categoryName = "";
+
+String cardNumber = "";
+String qrCode = "";
+String robotName = "";
+
+uint32_t timeZero = 0;
 
 
 void setup() {
     delay(2000);
     Serial.begin(115200);
     
-    Serial.println(gate_type);
     SPI.setSCK(SPI0_PIN_SCK);
     SPI.setTX(SPI0_PIN_MOSI);
     SPI.setRX(SPI0_PIN_MISO);
+    SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
     SPI.begin();
 
     pinMode(BUTTON_YELLOW, INPUT_PULLUP);
@@ -118,6 +143,7 @@ void setup() {
         qr.begin();
         Serial.println("QR scanner is present");
     }
+
 
     
 
@@ -168,49 +194,47 @@ void loop() {
   checkConnection();
   handleServerResponse();
 
-
-  if (Serial.available()) {
-        char key = Serial.read();
-        FirebaseJson data;
-
-        switch (key) {
-            case '1':
-                data.set("message", "Predefiniowana wiadomosc 1");
-                sendJsonMessage("GET_SETTINGS", data);
-                break;
-            case '2':
-                data.set("message", "Predefiniowana wiadomosc 2");
-                sendJsonMessage("GET_USER", data);
-                break;
-            case '3':
-                data.set("message", "Predefiniowana wiadomosc 3");
-                sendJsonMessage("GET_ROBOT", data);
-                break;
-            default:
-                Serial.println("Nieznany klawisz. Uzyj 1, 2 lub 3.");
-                break;
-        }
-    }
-
+    // Read RFID card data   
 
   
   static unsigned long repeat_rfid = 0;
   if (millis() - repeat_rfid > 500) {
-    digitalWrite(RC_522_SDA, LOW);
-    readDataFromRFIDCard();
-    digitalWrite(RC_522_SDA, HIGH);
+
+    String cardNumber = readDataFromRFIDCard();
+
+    if (cardNumber.length() > 0) {
+      FirebaseJson data;
+      data.set("user_rfid_code", cardNumber);
+      data.set("category_id", categoryID);
+      sendJsonMessage("GET_USER", data);
+    }
     repeat_rfid = millis();
   }
   
 
   // Read QR code data
   if (QRScanner_present) {
-    String qrCode = qr.readQRCode(true); // Pass 'true' to filter out corrupted data
-    if (qrCode.length() > 0) {
+    String tmpQrCode = qr.readQRCode(false); // Pass 'true' to filter out corrupted data
+    if (tmpQrCode.length() > 0) {
+      qrCode = tmpQrCode;
       Serial.print("QR Code: ");
       Serial.println(qrCode);
+      qr.setMode(false);
+
+      FirebaseJson data;
+      data.set("robot_qr_code", qrCode);
+      data.set("category_id", categoryID);
+      data.set("isFinal", isFinal);
+      sendJsonMessage("GET_ROBOT", data);
     }
   }
+
+  if (gateType == "FINISH") {
+    listenForSignals();
+  }
+  
+
+
 }
 
 
@@ -220,13 +244,28 @@ void loop() {
 //                                                                                                       LOOP 1
 
 void loop1() {
+    if (scrollable_line1) {
+        display.scrollLine1(screen_line1, 0, 25);
+    } else {
+        display.drawStaticText(screen_line1, 0, 0);
+    }
+
+    if (scrollable_line2) {
+        display.scrollLine2(screen_line2, 8, 50);
+    } else {
+        display.drawStaticText(screen_line2, 0, 8);
+    }
+
+    display.refresh();
+
+
   updateTime();
-  display.default_timer_screen(66, counter_m, counter_s, counter_ms);
+  //display.default_timer_screen(66, counter_m, counter_s, counter_ms);
   
   //display.drawStaticText("Static", 0, 0); // Wyświetl "Static" od pozycji (5, 4)
-  display.scrollText("Line Follower Standard!", 8, 25); // Przewijanie od linii 8 z prędkością 100 ms
+  //display.scrollText("Line Follower Standard!", 8, 25); // Przewijanie od linii 8 z prędkością 100 ms
 
-  display.refresh();
+  
 }
 
 
@@ -278,9 +317,14 @@ void updateTime() {
 
 
 
-void readDataFromRFIDCard() {
+String readDataFromRFIDCard() {
+  digitalWrite(RC_522_SDA, LOW);
+  //rfid.antennaOn();
+
   static unsigned char status;
-  static unsigned char str[MAX_LEN];  //MAX_LEN is 16, the maximum length of the array
+  static unsigned char str[MAX_LEN];  // MAX_LEN is 16, the maximum length of the array
+  String cardNumber = "";            // Initialize an empty String to store the card number
+
   // Search card, return card types
   if (rfid.findCard(PICC_REQIDL, str) == MI_OK) {
     Serial.println("Find the card!");
@@ -289,16 +333,20 @@ void readDataFromRFIDCard() {
     if (rfid.anticoll(str) == MI_OK) {
       Serial.print("The card's number is: ");
       for (int i = 0; i < 4; i++) {
-        Serial.printf("%02X", str[i]);
+        cardNumber += String(str[i], HEX); // Convert each byte to HEX and append to the String
       }
-      Serial.println();
+      cardNumber.toUpperCase();           // Ensure the card number is in uppercase
+      Serial.println(cardNumber);
     }
+
     // Card selection
     rfid.selectTag(str);
   }
 
-
   rfid.halt(); // Command the card to enter sleep mode
+  rfid.antennaOff();
+  digitalWrite(RC_522_SDA, HIGH);
+  return cardNumber; // Return the card number as a String
 }
 
 
@@ -327,6 +375,7 @@ void handleServerResponse() {
         FirebaseJson responseJson;
         FirebaseJsonData jsonData;
         String command;
+        bool synchroSuccess = false;
 
         // Odczytaj odpowiedź jako linię
         String response = client.readStringUntil('\n');
@@ -359,60 +408,81 @@ void handleServerResponse() {
         Serial.print("Komenda: ");
         Serial.println(command);
 
-        if (command == "CUSTOM_MESSAGE") {
-            String response;
-            if (daJson.get(jsonData, "response")) {
-                response = jsonData.stringValue;
-                Serial.print("Dane CUSTOM_MESSAGE: ");
-                Serial.println(response);
-            }
-        } else if (command == "ROBOT_INFO") {
-            String status;
-            if (daJson.get(jsonData, "status")) {
-                status = jsonData.stringValue;
-                Serial.print("Status robota: ");
-                Serial.println(status);
-            }
-        } else if (command == "GET_SETTINGS") {
-            // Deklaracja zmiennych
-            int gateID = 0;
-            String gateType;
-            int groupID = 0;
-            int categoryID = 0;
-            String gateNrfStartAddress;
-            String gateNrfEndAddress;
-            bool requiredUserCard = false;
-            bool requiredUserQrCode = false;
-            bool requiredConfirmation = false;
+        if (command == "GET_USER") {
+            String user;
+            if (daJson.get(jsonData, "player_name")) {user = jsonData.stringValue;}
 
+            Serial.print("Dane GET_USER: ");
+            Serial.println(user);
+            scrollable_line2 = 1;
+
+            if (user == "") {
+                screen_line2 = "Unknown user or wrong category";
+            } 
+            else {
+                screen_line2 = "Scan Robot QR code ";
+                screen_line2 += user;
+                qr.setMode(true);
+            }
+
+        } else if (command == "GET_ROBOT") {
+            String status;
+            if (daJson.get(jsonData, "robot_name")) {
+                robotName = jsonData.stringValue;
+                Serial.print("Status robota: ");
+                Serial.println(robotName);
+                if (gateType == "START") {
+                    screen_line1 = "Place robot ";
+                    screen_line1 += robotName;
+                    screen_line1 += " on the line";
+                    scrollable_line1 = 1;
+                    scrollable_line2 = 0;
+                    screen_line2 = gateType;
+                } else
+                {
+                    screen_line2 = gateType;
+                    scrollable_line2 = 0;
+                }
+            }
+            if (gateType == "START") {
+            synchroSuccess = synchronize_time_transmitter();
+            }
+
+            if (synchroSuccess) {
+              Serial.println("Synchronization successful");
+            } else {
+              Serial.println("Synchronization failed");
+            }
+            
+
+        } else if (command == "WRONG_ROBOT") {
+            Serial.println("Wrong robot scanned");
+            String errorMsg, errorStatusCode;
+            if (daJson.get(jsonData, "status_code")) {errorStatusCode = jsonData.stringValue;}
+            if (daJson.get(jsonData, "message")) {errorMsg = jsonData.stringValue;}
+            Serial.println(errorMsg);
+            screen_line2 = errorMsg;
+            scrollable_line2 = 1;
+        }
+        
+        
+        
+        else if (command == "GET_SETTINGS") {
+            String startAddress, finishAddress;
             // Pobieranie danych z JSON-a
-            if (daJson.get(jsonData, "gateID")) {
-                gateID = jsonData.intValue;
-            }
-            if (daJson.get(jsonData, "gateType")) {
-                gateType = jsonData.stringValue;
-            }
-            if (daJson.get(jsonData, "groupID")) {
-                groupID = jsonData.intValue;
-            }
-            if (daJson.get(jsonData, "categoryID")) {
-                categoryID = jsonData.intValue;
-            }
-            if (daJson.get(jsonData, "gateNrfStartAddress")) {
-                gateNrfStartAddress = jsonData.stringValue;
-            }
-            if (daJson.get(jsonData, "gateNrfEndAddress")) {
-                gateNrfEndAddress = jsonData.stringValue;
-            }
-            if (daJson.get(jsonData, "requiredUserCard")) {
-                requiredUserCard = jsonData.boolValue;
-            }
-            if (daJson.get(jsonData, "requiredUserQrCode")) {
-                requiredUserQrCode = jsonData.boolValue;
-            }
-            if (daJson.get(jsonData, "requiredConfirmation")) {
-                requiredConfirmation = jsonData.boolValue;
-            }
+            if (daJson.get(jsonData, "gateID")) {gateID = jsonData.intValue;}
+            if (daJson.get(jsonData, "gateType")) {gateType = jsonData.stringValue;}
+            if (daJson.get(jsonData, "groupID")) {groupID = jsonData.intValue;}
+            if (daJson.get(jsonData, "categoryID")) {categoryID = jsonData.intValue;}
+            if (daJson.get(jsonData, "gateNrfStartAddress")) {startAddress = jsonData.stringValue;}
+            if (daJson.get(jsonData, "gateNrfEndAddress")) {finishAddress = jsonData.stringValue;}
+            if (daJson.get(jsonData, "isfinal")) {isFinal = jsonData.boolValue;}
+            if (daJson.get(jsonData, "requiredUserCard")) {requiredUserCard = jsonData.boolValue;}
+            if (daJson.get(jsonData, "requiredUserQrCode")) {requiredUserQrCode = jsonData.boolValue;}
+            if (daJson.get(jsonData, "requiredConfirmation")) {requiredConfirmation = jsonData.boolValue;}
+            if (daJson.get(jsonData, "categoryName")) {categoryName = jsonData.stringValue;}
+
+            screen_line2 = gateType;
 
             // Wyświetlanie ustawień
             Serial.println("Ustawienia:");
@@ -420,11 +490,22 @@ void handleServerResponse() {
             Serial.print("gateType: "); Serial.println(gateType);
             Serial.print("groupID: "); Serial.println(groupID);
             Serial.print("categoryID: "); Serial.println(categoryID);
-            Serial.print("gateNrfStartAddress: "); Serial.println(gateNrfStartAddress);
-            Serial.print("gateNrfEndAddress: "); Serial.println(gateNrfEndAddress);
+            Serial.print("gateNrfStartAddress: "); Serial.println(startAddress);
+            Serial.print("gateNrfEndAddress: "); Serial.println(finishAddress);
             Serial.print("requiredUserCard: "); Serial.println(requiredUserCard);
             Serial.print("requiredUserQrCode: "); Serial.println(requiredUserQrCode);
             Serial.print("requiredConfirmation: "); Serial.println(requiredConfirmation);
+            Serial.print("categoryName: "); Serial.println(categoryName);
+
+            strncpy((char*)gateNrfStartAddress, startAddress.c_str(), sizeof(gateNrfStartAddress) - 1);
+            strncpy((char*)gateNrfFinishAddress, finishAddress.c_str(), sizeof(gateNrfFinishAddress) - 1);
+            Serial.println((char*)gateNrfStartAddress);
+            Serial.println((char*)gateNrfFinishAddress);
+            
+            
+            setRole(gateType);
+
+            
 
         } else if (command == "ERROR") {
             String errorMsg;
@@ -439,16 +520,16 @@ void handleServerResponse() {
 
 
 
-void setRole(Role role) {
-    currentRole = role;
-    if (role == RECEIVER) {
-        radio.openWritingPipe(reciever_address);
-        radio.openReadingPipe(1, transmiter_address);
+void setRole(String role) {
+    //currentRole = role;
+    if (role == "FINISH") {
+        radio.openWritingPipe(gateNrfFinishAddress);
+        radio.openReadingPipe(1, gateNrfStartAddress);
         radio.startListening();
         Serial.println("Role set to RECEIVER");
-    } else if (role == TRANSMITTER) {
-        radio.openWritingPipe(transmiter_address);
-        radio.openReadingPipe(1, reciever_address);
+    } else if (role == "START") {
+        radio.openWritingPipe(gateNrfStartAddress);
+        radio.openReadingPipe(1, gateNrfFinishAddress);
         radio.stopListening();
         Serial.println("Role set to TRANSMITTER");
     }
@@ -470,8 +551,12 @@ void listenForSignals() {
                 Serial.println("No time received by interrupt??");
                 break;
             }
-            synchronize_time_receiver(transmiter_address, reciever_address, recievedTime);
-            break;    
+            synchronize_time_receiver(recievedTime);
+            break;  
+
+        case 0x02: // Assuming 0x02 represents "START"
+            Serial.println("START command received");
+            break;  
 
         default:  
             break;
@@ -483,13 +568,14 @@ void listenForSignals() {
 }
 
 
-bool synchronize_time_transmitter(uint8_t *transmitter_address, uint8_t *receiver_address) {
+bool synchronize_time_transmitter() {
     unsigned long transmitterTimeInterrupt = 0;
     unsigned long transmitterTime = micros();
     unsigned long receiverTime = 0;
     unsigned long roundTripTimeStart = 0;
     unsigned long roundTripTimeEnd = 0;
     unsigned long roundTripTime = 0;
+    timeZero = 0;
 
     radio.maskIRQ(false, true, true);
     radio.stopListening();
@@ -502,11 +588,13 @@ bool synchronize_time_transmitter(uint8_t *transmitter_address, uint8_t *receive
         return false;
     }
     transmitterTimeInterrupt = NRF_interrupt_time;
+    timeZero = transmitterTimeInterrupt;
     NRF_interrupt = false;
 
     if (transmitterTime > transmitterTimeInterrupt) {
         Serial.println("NOT VALID INTERRUPT.");
         return false;
+        timeZero = 0;
     }
 
     // Start listening for the response
@@ -537,7 +625,11 @@ bool synchronize_time_transmitter(uint8_t *transmitter_address, uint8_t *receive
     return true;
 }
 
-bool synchronize_time_receiver(uint8_t *transmitter_address, uint8_t *receiver_address, uint32_t last_received_interrupt_time) {
+
+
+
+bool synchronize_time_receiver(uint32_t last_received_interrupt_time) {
+  timeZero = 0; 
   uint32_t synchro_time = last_received_interrupt_time;
   radio.flush_tx();
   delayMicroseconds(10000);
@@ -548,6 +640,7 @@ bool synchronize_time_receiver(uint8_t *transmitter_address, uint8_t *receiver_a
   }
   else {  
     Serial.print("Time sent successfully.\n");
+    timeZero = last_received_interrupt_time;
     Serial.println(synchro_time);
     return true;
   }
@@ -561,4 +654,7 @@ bool waitForRadio(unsigned long timeout) {
   NRF_interrupt = false;
   return true;
 }
+
+
+
 
