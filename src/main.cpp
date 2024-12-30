@@ -12,7 +12,7 @@
 #include "P10Display.hpp"
 #include "main.hpp"
 
-#define GATE_SERIAL_NUMBER 1
+#define GATE_SERIAL_NUMBER 0
 
 
 #define BARCODE_SCANNER_PRESENT_PIN 0
@@ -50,11 +50,13 @@
 #define LCD_LATCH 20  // Latch to display data
 #define LCD_DATA 21   // Serial data input
 
+#define IR_IRQ_PIN 22
+
 
 
 struct Data_Package {
-    uint8_t command;
-    uint32_t time;
+    uint32_t command;
+    uint64_t time;
 };
 
 
@@ -89,6 +91,7 @@ volatile bool QRScanner_present = false;
 
 volatile bool scrollable_line1 = 1;
 volatile bool scrollable_line2 = 0;
+volatile bool show_timer_line1 = 0;
 
 String screen_line1 = "Welcome to Line Follower Measurement System";
 String screen_line2 = "STARTING!";
@@ -113,6 +116,19 @@ String qrCode = "";
 String robotName = "";
 
 uint32_t timeZero = 0;
+int32_t timeDiffrence = 0;
+
+uint32_t start_time_interrupt = 0;
+uint32_t finish_time_interrupt = 0;
+bool start_time_status = 0;
+bool finish_time_status = 0;
+bool waintingForCountingTime = 0;
+bool countingTimeInProgress = 0;
+
+bool startCommandSuccessfullySend = 0;
+bool startCommandSuccessfullyRecieved = 0;
+bool finishCommandSuccessfullySend = 0;
+bool finishCommandSuccessfullyRecieved = 0;
 
 
 void setup() {
@@ -129,6 +145,7 @@ void setup() {
     pinMode(BUTTON_BLACK, INPUT_PULLUP); 
     pinMode(LED_GREEN, OUTPUT);
     pinMode(LED_RED, OUTPUT);
+    pinMode(IR_IRQ_PIN, INPUT_PULLUP);
     pinMode(BARCODE_SCANNER_PRESENT_PIN, INPUT_PULLUP);
     digitalWrite(LED_GREEN, HIGH);
     digitalWrite(LED_RED, LOW);
@@ -168,7 +185,6 @@ void setup() {
     radio.maskIRQ(true, true, false);
 
     attachInterrupt(digitalPinToInterrupt(BUTTON_YELLOW), handleInterruptYellow, FALLING);
-    attachInterrupt(digitalPinToInterrupt(BUTTON_BLACK), handleInterruptBlack, FALLING);
     attachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT), handleInterrupt, FALLING);
   
 }
@@ -191,8 +207,65 @@ void setup1(){
 //                                                                                                       LOOP 0
 
 void loop() {
+  //Serial.println(micros() - start_time_interrupt);
   checkConnection();
   handleServerResponse();
+
+
+  static uint32_t time_brake_sensor = 0;
+  static bool ir_brake_active = false;
+
+  if (digitalRead(IR_IRQ_PIN) == LOW) {
+    if (!ir_brake_active) {
+      time_brake_sensor = millis();
+      ir_brake_active = true;
+    } else if (millis() - time_brake_sensor > 1000) {
+      screen_line2 = "IRerror";
+    }
+  } else {
+    if (ir_brake_active) {
+      screen_line2 = "";
+    }
+    ir_brake_active = false;
+  }
+
+
+
+  if (gateType == "START") {
+    if (!startCommandSuccessfullySend) {
+      if (start_time_status) {
+        show_timer_line1 = 1;
+        startCommandSuccessfullySend = sendStartCommand();
+        radio.startListening();
+      }
+    }
+    if (startCommandSuccessfullySend && !finishCommandSuccessfullyRecieved) {
+      //Serial.println("Słucham");
+      
+      listenForSignals();
+    }
+    
+    
+  } else if (gateType == "FINISH")
+  {
+    if (startCommandSuccessfullyRecieved) {
+      show_timer_line1 = 1;
+      if (start_time_status) {
+        if (!finishCommandSuccessfullySend) {
+          if (finish_time_interrupt) {
+            finishCommandSuccessfullySend = sendFinishCommand();
+            Serial.println("Wysłano finish");
+            Serial.println(finishCommandSuccessfullySend);
+          }
+        }
+        
+      }
+    }
+    else if (!startCommandSuccessfullyRecieved){
+      listenForSignals();
+    } 
+  }
+  
 
     // Read RFID card data   
 
@@ -229,11 +302,7 @@ void loop() {
     }
   }
 
-  if (gateType == "FINISH") {
-    listenForSignals();
-  }
   
-
 
 }
 
@@ -244,10 +313,24 @@ void loop() {
 //                                                                                                       LOOP 1
 
 void loop1() {
-    if (scrollable_line1) {
-        display.scrollLine1(screen_line1, 0, 25);
-    } else {
-        display.drawStaticText(screen_line1, 0, 0);
+  static bool last_show_timer_line1 = 0;
+    if (show_timer_line1) {
+      if (last_show_timer_line1 == 0) {
+        display.drawStaticText("           ", 0, 0);
+        last_show_timer_line1 = 1;
+      }
+      else {
+        updateTime();
+        display.default_timer_screen(66, counter_m, counter_s, counter_ms);
+      }
+
+      } else {
+      last_show_timer_line1 = 0;
+      if (scrollable_line1) {
+          display.scrollLine1(screen_line1, 0, 25);
+      } else {
+          display.drawStaticText(screen_line1, 0, 0);
+      }
     }
 
     if (scrollable_line2) {
@@ -257,62 +340,59 @@ void loop1() {
     }
 
     display.refresh();
-
-
-  updateTime();
-  //display.default_timer_screen(66, counter_m, counter_s, counter_ms);
-  
-  //display.drawStaticText("Static", 0, 0); // Wyświetl "Static" od pozycji (5, 4)
-  //display.scrollText("Line Follower Standard!", 8, 25); // Przewijanie od linii 8 z prędkością 100 ms
-
-  
 }
-
-
-
-
-
-
-
-
-
 
 
 void handleInterrupt() {
   NRF_interrupt_time = micros();
-  //Serial.println("NRF24L01 interrupt!");
 }
 
 
-
-
-
 void handleInterruptYellow() {
+
+  
   static bool last_state = 0;
   yellow_pressed = true;
 }
 
 void handleInterruptBlack() {
-  Serial.println("Black button pressed");
-  static bool last_state = 0;
   black_pressed = true;
+}
 
+
+void handleInterruptIR() {
+  if (gateType == "START") {
+    start_time_interrupt = (uint32_t)micros();
+    start_time_status = 1;
+    Serial.println("START Interrupt");
+    Serial.println(start_time_interrupt);
+  } else {
+    finish_time_interrupt = (uint32_t)micros();
+    finish_time_status = 1;
+    Serial.println("FINISH Interrupt");
+    Serial.println(finish_time_interrupt);
+  }
+  detachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN));
 }
 
 
 
 void updateTime() {
-  unsigned long currentMillis = millis(); // Aktualny czas w ms od startu programu
+  uint32_t start = (start_time_interrupt / 1000); // Odcinamy 3 ostatnie zera (optymalnie)
+  uint32_t finish = (finish_time_interrupt / 1000); // Odcinamy 3 ostatnie zera (optymalnie)
 
-  counter_m = (currentMillis / 60000) % 60;       // Minuty (każde 60 000 ms to 1 minuta)
-  counter_s = (currentMillis / 1000) % 60;        // Sekundy (każde 1000 ms to 1 sekunda)
-  counter_ms = currentMillis % 1000;              // Milisekundy (reszta z dzielenia przez 1000)
+  if (start_time_status && !finish_time_status) {
+    unsigned long currentMillis = millis(); // Aktualny czas w ms od startu programu
+    counter_m = ((currentMillis-start) / 60000) % 60;       // Minuty (każde 60 000 ms to 1 minuta)
+    counter_s = ((currentMillis-start) / 1000) % 60;        // Sekundy (każde 1000 ms to 1 sekunda)
+    counter_ms = (currentMillis-start) % 1000;              // Milisekundy (reszta z dzielenia przez 1000)
+  }
+  else {
+    counter_m = ((finish-start) / 60000) % 60;       // Minuty (każde 60 000 ms to 1 minuta)
+    counter_s = ((finish-start) / 1000) % 60;        // Sekundy (każde 1000 ms to 1 sekunda)
+    counter_ms = (finish-start) % 1000;              // Milisekundy (reszta z dzielenia przez 1000)
+  }
 }
-
-
-
-
-
 
 
 
@@ -445,14 +525,14 @@ void handleServerResponse() {
                 }
             }
             if (gateType == "START") {
-            synchroSuccess = synchronize_time_transmitter();
+              synchroSuccess = synchronize_time_transmitter();
+            }
+            if (synchroSuccess) {
+              attachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN), handleInterruptIR, FALLING);
+              waintingForCountingTime = true;
+              Serial.println("enable interrupt start");
             }
 
-            if (synchroSuccess) {
-              Serial.println("Synchronization successful");
-            } else {
-              Serial.println("Synchronization failed");
-            }
             
 
         } else if (command == "WRONG_ROBOT") {
@@ -541,22 +621,49 @@ void listenForSignals() {
   if (radio.available()) {
     uint8_t receivedCommand = 0;
     uint32_t recievedTime = NRF_interrupt_time;
+    Data_Package nrf_data;
+    Serial.println("Data available");
 
-    radio.stopListening();
-    radio.read(&receivedCommand, sizeof(receivedCommand));
+    //radio.stopListening();
+    radio.read(&nrf_data, sizeof(Data_Package));
 
-    switch (receivedCommand) {
+    switch (nrf_data.command) {
         case 0x01: // Assuming 0x01 represents "TS"
             if (recievedTime == 0) {
                 Serial.println("No time received by interrupt??");
                 break;
             }
+            Serial.println("Time synchronization command received");
             synchronize_time_receiver(recievedTime);
             break;  
 
-        case 0x02: // Assuming 0x02 represents "START"
-            Serial.println("START command received");
+        case 0x02: // Assuming 0x02 represents"
+            Serial.println("Resend synchro time command received");
+            sendTime(timeZero);
             break;  
+          
+        case 0x03: // Assuming 0x03 represents "STOP"
+            Serial.println("START command received - turn on interrupt");
+            startCommandSuccessfullyRecieved = 1;
+            start_time_status = 1;
+            start_time_interrupt = (uint32_t)nrf_data.time;
+            Serial.print("START command received local time:\t");
+            Serial.print(micros());
+            Serial.print("otrzymano czas:\t");
+            Serial.println(start_time_interrupt);
+            attachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN), handleInterruptIR, FALLING);
+            
+            break;
+
+        case 0x04: // Assuming 0x04 represents "RESET"
+            Serial.println("FINISH command received");
+            finishCommandSuccessfullyRecieved = 1;
+            finish_time_status = 1;
+            Serial.println(nrf_data.time);
+            Serial.println(timeDiffrence);
+            finish_time_interrupt = (uint32_t)((int32_t)nrf_data.time + (int32_t)timeDiffrence);
+            Serial.println(finish_time_interrupt);
+            break;
 
         default:  
             break;
@@ -569,32 +676,39 @@ void listenForSignals() {
 
 
 bool synchronize_time_transmitter() {
-    unsigned long transmitterTimeInterrupt = 0;
-    unsigned long transmitterTime = micros();
-    unsigned long receiverTime = 0;
-    unsigned long roundTripTimeStart = 0;
-    unsigned long roundTripTimeEnd = 0;
-    unsigned long roundTripTime = 0;
+    uint32_t transmitterTimeInterrupt = 0;
+    uint32_t transmitterTime = micros();
+    uint32_t receiverTime = 0;
+    uint32_t roundTripTimeStart = 0;
+    uint32_t roundTripTimeEnd = 0;
+    uint32_t roundTripTime = 0;
     timeZero = 0;
 
     radio.maskIRQ(false, true, true);
-    radio.stopListening();
+    
     
     
     // Send synchronization command ("TS")
-    uint8_t command_synchronize = 0x01; // Assuming 0x01 represents "TS"
-    if (!radio.write(&command_synchronize, sizeof(command_synchronize))) {
+    uint32_t command_synchronize = 0x01; // Assuming 0x01 represents "TS"
+    Data_Package nrf_data;
+    nrf_data.command = command_synchronize;
+    nrf_data.time = 0;
+    radio.stopListening();
+    if (!radio.write(&nrf_data, sizeof(Data_Package))) {
         Serial.println("Failed to send synchronization command.");
         return false;
     }
+    //Serial.println("Synchronization command sent.");
     transmitterTimeInterrupt = NRF_interrupt_time;
+    roundTripTimeStart = transmitterTimeInterrupt;
     timeZero = transmitterTimeInterrupt;
+    Serial.println(roundTripTimeStart);
     NRF_interrupt = false;
 
     if (transmitterTime > transmitterTimeInterrupt) {
         Serial.println("NOT VALID INTERRUPT.");
-        return false;
         timeZero = 0;
+        return false;
     }
 
     // Start listening for the response
@@ -603,25 +717,37 @@ bool synchronize_time_transmitter() {
     
     waitForRadio(50000);
     roundTripTimeEnd = NRF_interrupt_time;
+    Serial.println(roundTripTimeEnd);
 
     // Read the receiver's time
     if (radio.available()) {
-        radio.read(&receiverTime, sizeof(receiverTime));
-        long timeDiff = (long)receiverTime - (long)transmitterTimeInterrupt;
-        roundTripTimeStart = transmitterTimeInterrupt;
+        radio.read(&nrf_data, sizeof(Data_Package));
+        Serial.println(nrf_data.command);
+        Serial.println(nrf_data.time);
+
+        if (nrf_data.command != 123456789) {
+            Serial.println("Invalid command received.");
+            receiverTime = requestTimeWithRetries(10, 50000);
+        }
+        else {
+            receiverTime = nrf_data.time;
+        }
+
+        //receiverTime = nrf_data.time;
+        timeDiffrence = (int32_t)transmitterTimeInterrupt - (int32_t)receiverTime;
+        
         Serial.print("Transmitter time: \t");
         Serial.print(transmitterTimeInterrupt);
         Serial.print("\tReceiver time: \t");
         Serial.print(receiverTime);
         Serial.print("\tTime difference: \t");
-        Serial.print(timeDiff);
+        Serial.print(timeDiffrence);
         Serial.print("\tRound trip time: \t");
-        Serial.println(roundTripTimeEnd - roundTripTimeStart-10000);
+        Serial.println(roundTripTimeEnd - roundTripTimeStart - 5000);
     } else {
         Serial.println("No data available.");
         return false;
     }
-
     return true;
 }
 
@@ -631,17 +757,38 @@ bool synchronize_time_transmitter() {
 bool synchronize_time_receiver(uint32_t last_received_interrupt_time) {
   timeZero = 0; 
   uint32_t synchro_time = last_received_interrupt_time;
+  Data_Package nrf_data;
   radio.flush_tx();
-  delayMicroseconds(10000);
-  
-  if (!radio.write(&synchro_time, sizeof(synchro_time))) {
+  delayMicroseconds(5000);
+  nrf_data.command = 123456789; // Assuming 0x01 represents "TS"
+  nrf_data.time = synchro_time;
+  radio.stopListening();
+  if (!radio.write(&nrf_data, sizeof(Data_Package))) {
     Serial.println("Failed to send current time.");
     return false;
   }
   else {  
-    Serial.print("Time sent successfully.\n");
+    Serial.print("Time sent successfullyyyyyyy.\n");
     timeZero = last_received_interrupt_time;
     Serial.println(synchro_time);
+    return true;
+  }
+}
+
+
+bool sendTime(uint32_t time) {
+  Data_Package nrf_data;
+  nrf_data.command = 123456789; // Assuming 0x01 represents "TS"
+  nrf_data.time = time;
+  delayMicroseconds(5000);
+  radio.stopListening();
+  if (!radio.write(&nrf_data, sizeof(Data_Package))) {
+    Serial.println("Failed to send current time.");
+    return false;
+  }
+  else {  
+    Serial.println("Time sent successfully.\n");
+    Serial.println(time);
     return true;
   }
 }
@@ -657,4 +804,75 @@ bool waitForRadio(unsigned long timeout) {
 
 
 
+uint32_t requestTimeWithRetries(uint8_t maxRetries, unsigned long waitDuration) {
+    Data_Package nrf_data;
+    uint32_t validTime = 0;
+    
 
+    for (uint8_t attempt = 0; attempt < maxRetries; ++attempt) {
+        // Send command 0x02 to request time
+        nrf_data.command = 0x02; // Assuming 0x02 represents "START"
+        nrf_data.time = 0;
+        
+        radio.stopListening();
+        if (!radio.write(&nrf_data, sizeof(Data_Package))) {
+            Serial.println("Failed to request time.");
+        }
+
+        // Start listening for response
+        radio.startListening();
+        waitForRadio(waitDuration);
+
+        if (radio.available()) {
+            radio.read(&nrf_data, sizeof(Data_Package));
+            if (nrf_data.command == 123456789) {
+                validTime = nrf_data.time;
+                Serial.print("Valid time received on attempt ");
+                Serial.print(attempt + 1);
+                Serial.print(": ");
+                Serial.println(validTime);
+                return validTime;
+            } else {
+                Serial.println("Invalid command received, retrying...");
+            }
+        } else {
+            Serial.println("No response received, retrying...");
+        }
+        radio.stopListening();
+    }
+
+    Serial.println("Failed to receive valid time after maximum retries.");
+    return 0;
+}
+
+
+bool sendStartCommand() {
+    Data_Package nrf_data;
+    nrf_data.command = 0x03; // Assuming 0x02 represents "START"
+    nrf_data.time = (uint64_t)((int64_t)start_time_interrupt - (int64_t)timeDiffrence);
+    
+    radio.stopListening();
+    if (!radio.write(&nrf_data, sizeof(Data_Package))) {
+        Serial.println("Failed to send start command.");
+        radio.startListening();
+        return false;
+    }
+    return true;
+    radio.startListening();
+}
+
+
+bool sendFinishCommand() {
+    Data_Package nrf_data;
+    nrf_data.command = 0x04; // Assuming 0x03 represents "STOP"
+    nrf_data.time = (uint64_t)finish_time_interrupt;
+
+    radio.stopListening();
+    if (!radio.write(&nrf_data, sizeof(Data_Package))) {
+        Serial.println("Failed to send finish command.");
+        radio.startListening();
+        return false;
+    }
+    radio.startListening();
+    return true;
+}
