@@ -7,18 +7,23 @@ struct Data_Package {
 };
 
 struct Gate {
-    String type;
     uint8_t ID;
-    uint8_t groupID;
-    uint8_t categoryID;
-    String categoryName;
-    uint8_t startAddress[6];
-    uint8_t finishAddress[6];
+    uint8_t pairID;
     bool active;
-    bool final;
+    uint8_t startGateID;
+    uint8_t finishGateID;
+    uint8_t categoryID;
+    uint8_t stageID;
+    uint8_t nrfStartAddress[6];
+    uint8_t nrfFinishAddress[6];
     bool requiredUserCard;
     bool requiredUserQrCode;
     bool requiredConfirmation;
+    String categoryName;
+    String stageName;
+    String typeName;
+    bool start = false;
+    bool finish = false;
 };
 
 enum State {
@@ -44,6 +49,8 @@ struct Measurement {
   String userName = "";
   String qrCode = "";
   String robotName = "";
+
+  bool rfidScanned = false;
 
   uint8_t synchroCounter = 0;
   bool synchroSuccess = 0;
@@ -94,3 +101,5 @@ bool waitForRadio(unsigned long timeout);
 
 bool checkIR(uint32_t timeout);
 void resetMeasurement(Measurement &measurement);
+void checkConnection();
+void handleUserReset();

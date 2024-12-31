@@ -12,7 +12,7 @@
 #include "P10Display.hpp"
 #include "main.hpp"
 
-#define GATE_SERIAL_NUMBER 1
+#define GATE_SERIAL_NUMBER 2
 
 
 #define BARCODE_SCANNER_PRESENT_PIN 0
@@ -135,7 +135,7 @@ void setup() {
     connectToServer();
     FirebaseJson data;
     data.set("serial_number", GATE_SERIAL_NUMBER);
-    sendJsonMessage("GATE_HELLO", data);
+    sendJsonMessage("GET_SETTINGS", data);
     
     while (!client.available()) {
         Serial.println("Waiting for serwer response...");
@@ -175,6 +175,7 @@ void setup1(){
 //                                                                                                       LOOP 0
 
 void loop() {
+  handleUserReset();
   checkConnection();
   String serwerCommand;
   handleServerResponse(serwerCommand);
@@ -208,10 +209,11 @@ void loop() {
       String screen_line1 = gate.categoryName;
       screen_line1 += " Please scan your card";
       display.setLineDynamic(0, screen_line1, true, display_speed1, true);
-      display.setLineStatic(1, gate.type, 1, true);
+      display.setLineStatic(1, gate.typeName, 1, true);
 
       if (processRFIDCard(500, currMeasurement.cardNumber)) 
       {
+          currMeasurement.rfidScanned = true;
           FirebaseJson message;
           message.set("user_rfid_code", currMeasurement.cardNumber);
           message.set("category_id", gate.categoryID);
@@ -243,12 +245,15 @@ void loop() {
       }
       else {
         display.setLineDynamic(0, "Error! Unknown user or wrong category!", true, display_speed1, true);
-        display.setLineStatic(1, gate.type, 1, true);
-        if (waitForNextState(3000)) 
-        {
-          currentState = RESET_WAITING;
-          Serial.println("RESET_WAITING");
+        display.setLineStatic(1, gate.typeName, 1, true);
+        if (currMeasurement.rfidScanned){
+          if (waitForNextState(3000)) 
+          {
+            currentState = RESET_WAITING;
+            Serial.println("RESET_WAITING");
+          }
         }
+        
       }
     }
 
@@ -262,7 +267,7 @@ void loop() {
   { 
     
     // Handle time synchronization state
-    if (gate.type == "START") {
+    if (gate.typeName == "START") {
       if (currMeasurement.synchroCounter > 20)
       {
         display.setLineDynamic(0, "Error! Unable to synchronize time! Please try again!", true, display_speed1, true);
@@ -302,15 +307,15 @@ void loop() {
     screen_line1 += currMeasurement.userName;
     screen_line1 += " Please scan Robot QR code";
     display.setLineDynamic(0, screen_line1, true, display_speed1, true);
-    display.setLineStatic(1, gate.type, 1, true);
-    if (gate.type == "START") 
+    display.setLineStatic(1, gate.typeName, 1, true);
+    if (gate.typeName == "START") 
     {
       if (processQRCode(100, currMeasurement.qrCode)) 
       {
         FirebaseJson data;
         data.set("robot_qr_code", currMeasurement.qrCode);
         data.set("category_id", gate.categoryID);
-        data.set("isFinal", gate.final);
+        data.set("stage_id", gate.stageID);
         sendJsonMessage("GET_ROBOT", data);
         
         currentState = QR_SCANNED;
@@ -347,13 +352,13 @@ void loop() {
         String screen_line1 = "Hello ";
         screen_line1 += currMeasurement.robotName;
         display.setLineDynamic(0, screen_line1, true, display_speed1, true);
-        display.setLineStatic(1, gate.type, 1, true);
+        display.setLineStatic(1, gate.typeName, 1, true);
         if (waitForNextState(2000)) 
         {
           currentState = START_WAITING;
           Serial.println("START_WAITING");
 
-          if (gate.type == "START") 
+          if (gate.typeName == "START") 
           {
             attachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN), handleInterruptIR, FALLING);
             Serial.println("enable interrupt start");
@@ -361,7 +366,7 @@ void loop() {
             screen_line1 += currMeasurement.robotName;
             screen_line1 += " on the start gate and good luck!";
             display.setLineDynamic(0, screen_line1, true, display_speed1, true);
-            display.setLineStatic(1, gate.type, 1, true);
+            display.setLineStatic(1, gate.typeName, 1, true);
             display.startBlinking(1, 250);
           }
           else 
@@ -370,15 +375,15 @@ void loop() {
             screen_line1 += currMeasurement.robotName;
             screen_line1 += " on the start gate and good luck!";
             display.setLineDynamic(0, "Plan", true, display_speed1, true);
-            display.setLineStatic(1, gate.type, 1, true);
+            display.setLineStatic(1, gate.typeName, 1, true);
           }
-          //screen_line2 = gate.type;
+          //screen_line2 = gate.typeName;
         }
       }
       else 
       {
         display.setLineDynamic(0, currMeasurement.wrongRobotMessage, true, display_speed1, true);
-        display.setLineStatic(1, gate.type, 1, true);
+        display.setLineStatic(1, gate.typeName, 1, true);
         if (waitForNextState(3000)) 
         {
           currentState = RESET_WAITING;
@@ -392,7 +397,7 @@ void loop() {
     
   //                                       CASE START_WAITING
   case START_WAITING: // Handle start waiting state
-    if (gate.type == "START") {
+    if (gate.typeName == "START") {
       if(currMeasurement.start_time_status) 
       {
         currentState = STARTED;
@@ -422,7 +427,7 @@ void loop() {
   //                                       CASE STARTED    
   case STARTED: // Handle started state
   {
-    if (gate.type == "START") 
+    if (gate.typeName == "START") 
     {
       if (sendStartCommand()) 
       {
@@ -444,7 +449,7 @@ void loop() {
   //                                       CASE FINISH_WAITING
   case FINISH_WAITING: // Handle finish waiting state
   {
-    if (gate.type == "START") 
+    if (gate.typeName == "START") 
     {
       listenForSignals();
       if (currMeasurement.finish_time_status) 
@@ -471,7 +476,7 @@ void loop() {
   //                                       CASE FINISHED
   case FINISHED: // Handle finished state
   {
-    if (gate.type == "START") 
+    if (gate.typeName == "START") 
     {
       // only show time
       currentState = CONFIRMATION;
@@ -523,18 +528,22 @@ void loop() {
     FirebaseJson data;
     data.set("RESET", true);
     sendJsonMessage("RESET", data);
-    resetMeasurement(currMeasurement);
     display.stopBlinking(0);
     display.stopBlinking(1);
+    currentState = RESETING;
     break;
   }
     
   //                                       CASE RESETING
   case RESETING: // Handle reset state
   {
+    resetMeasurement(currMeasurement);
     Serial.println("RESETING");
     qr.setMode(false);
     currentState = IDLE;
+    FirebaseJson data;
+    data.set("serial_number", GATE_SERIAL_NUMBER);
+    sendJsonMessage("GET_SETTINGS", data);
     break;
   }
     
@@ -584,7 +593,7 @@ void handleInterrupt() {
 
 
 void handleInterruptIR() {
-  if (gate.type == "START") {
+  if (gate.typeName == "START") {
     currMeasurement.start_time_interrupt = (uint32_t)micros();
     currMeasurement.start_time_status = 1;
     Serial.println("START Interrupt");
@@ -752,7 +761,7 @@ bool handleServerResponse(String command) {
     Serial.print("Komenda: ");
     Serial.println(command);
 
-    if (command == "GET_USER") 
+    if (command == "USER") 
     {
       currMeasurement.getUserRecieved = true;
       if (daJson.get(jsonData, "player_name")) 
@@ -773,7 +782,7 @@ bool handleServerResponse(String command) {
       }
 
     } 
-    else if (command == "GET_ROBOT") 
+    else if (command == "ROBOT") 
     {
       currMeasurement.getRobotRecieved = true;
       currMeasurement.robotFound = true;
@@ -794,44 +803,58 @@ bool handleServerResponse(String command) {
       Serial.println(currMeasurement.wrongRobotMessage);
 
     } 
-    else if (command == "GET_SETTINGS") 
+    else if (command == "SETTINGS") 
     {
       String startAddress, finishAddress;
-      if (daJson.get(jsonData, "gateID")) {gate.ID = jsonData.intValue;}
-      if (daJson.get(jsonData, "gateType")) {gate.type = jsonData.stringValue;}
-      if (daJson.get(jsonData, "groupID")) {gate.groupID = jsonData.intValue;}
-      if (daJson.get(jsonData, "categoryID")) {gate.categoryID = jsonData.intValue;}
-      if (daJson.get(jsonData, "gateNrfStartAddress")) {
-        startAddress = jsonData.stringValue;
-        strncpy((char*)gate.startAddress, startAddress.c_str(), sizeof(gate.startAddress) - 1);
+      if (daJson.get(jsonData, "pair_id")) { gate.pairID = jsonData.intValue; }
+      if (daJson.get(jsonData, "active")) { gate.active = jsonData.boolValue; }
+      if (daJson.get(jsonData, "start_gate_id")) { gate.startGateID = jsonData.intValue; }
+      if (daJson.get(jsonData, "finish_gate_id")) { gate.finishGateID = jsonData.intValue; }
+      if (daJson.get(jsonData, "category_id")) { gate.categoryID = jsonData.intValue; }
+      if (daJson.get(jsonData, "stage_id")) { gate.stageID = jsonData.intValue; }
+      if (daJson.get(jsonData, "start_nrf")) {
+          startAddress = jsonData.stringValue;
+          strncpy((char*)gate.nrfStartAddress, startAddress.c_str(), sizeof(gate.nrfStartAddress) - 1);
       }
-      if (daJson.get(jsonData, "gateNrfEndAddress")) {
-        finishAddress = jsonData.stringValue;
-        strncpy((char*)gate.finishAddress, finishAddress.c_str(), sizeof(gate.finishAddress) - 1);
+      if (daJson.get(jsonData, "finish_nrf")) {
+          finishAddress = jsonData.stringValue;
+          strncpy((char*)gate.nrfFinishAddress, finishAddress.c_str(), sizeof(gate.nrfFinishAddress) - 1);
       }
-      if (daJson.get(jsonData, "isFinal")) {gate.final = jsonData.boolValue;}
-      if (daJson.get(jsonData, "requiredUserCard")) {gate.requiredUserCard = jsonData.boolValue;}
-      if (daJson.get(jsonData, "requiredUserQrCode")) {gate.requiredUserQrCode = jsonData.boolValue;}
-      if (daJson.get(jsonData, "requiredConfirmation")) {gate.requiredConfirmation = jsonData.boolValue;}
-      if (daJson.get(jsonData, "isActive")) {gate.active = jsonData.boolValue;}
-      if (daJson.get(jsonData, "categoryName")) {gate.categoryName = jsonData.stringValue;}
+      if (daJson.get(jsonData, "requires_user_card")) { gate.requiredUserCard = jsonData.boolValue; }
+      if (daJson.get(jsonData, "requires_user_qr_code")) { gate.requiredUserQrCode = jsonData.boolValue; }
+      if (daJson.get(jsonData, "requires_judge_confirmation")) { gate.requiredConfirmation = jsonData.boolValue; }
+      if (daJson.get(jsonData, "category_name")) { gate.categoryName = jsonData.stringValue; }
+      if (daJson.get(jsonData, "stage_name")) { gate.stageName = jsonData.stringValue; }
+      if (daJson.get(jsonData, "gate_type")) { gate.typeName = jsonData.stringValue; }
+
       // Wyświetlanie ustawień
       Serial.println("Ustawienia:");
-      Serial.print("gateID: "); Serial.println(gate.ID);
-      Serial.print("gateType: "); Serial.println(gate.type);
-      Serial.print("groupID: "); Serial.println(gate.groupID);
+      Serial.print("pairID: "); Serial.println(gate.pairID);
+      Serial.print("isActive: "); Serial.println(gate.active);
+      Serial.print("startGateID: "); Serial.println(gate.startGateID);
+      Serial.print("finishGateID: "); Serial.println(gate.finishGateID);
       Serial.print("categoryID: "); Serial.println(gate.categoryID);
-      Serial.print("gateNrfStartAddress: "); Serial.println(startAddress);
-      Serial.print("gateNrfEndAddress: "); Serial.println(finishAddress);
+      Serial.print("stageID: "); Serial.println(gate.stageID);
+      Serial.print("nrfStartAddress: "); Serial.println(startAddress);
+      Serial.print("nrfFinishAddress: "); Serial.println(finishAddress);
       Serial.print("requiredUserCard: "); Serial.println(gate.requiredUserCard);
       Serial.print("requiredUserQrCode: "); Serial.println(gate.requiredUserQrCode);
       Serial.print("requiredConfirmation: "); Serial.println(gate.requiredConfirmation);
-      Serial.print("isActive: "); Serial.println(gate.active);
       Serial.print("categoryName: "); Serial.println(gate.categoryName);
+      Serial.print("stageName: "); Serial.println(gate.stageName);
+      Serial.print("gateType: "); Serial.println(gate.typeName);
 
-      setRole(gate.type);
+      if (gate.typeName == "START") {
+        gate.start = true;
+      }
+      if (gate.typeName == "FINISH") {
+        gate.finish = true;
+      }
 
-    } else if (command == "RESET_RESULT") {
+      setRole(gate.typeName);
+
+    } else if (command == "RESET") {
+      if (daJson.get(jsonData, "message")) {currMeasurement.wrongRobotMessage = jsonData.stringValue;}
       currentState = RESETING;
 
     } else {
@@ -847,13 +870,13 @@ bool handleServerResponse(String command) {
 void setRole(String role) {
     //currentRole = role;
     if (role == "FINISH") {
-        radio.openWritingPipe(gate.finishAddress);
-        radio.openReadingPipe(1, gate.startAddress);
+        radio.openWritingPipe(gate.nrfFinishAddress);
+        radio.openReadingPipe(1, gate.nrfStartAddress);
         radio.startListening();
         Serial.println("Role set to RECEIVER");
     } else if (role == "START") {
-        radio.openWritingPipe(gate.startAddress);
-        radio.openReadingPipe(1, gate.finishAddress);
+        radio.openWritingPipe(gate.nrfStartAddress);
+        radio.openReadingPipe(1, gate.nrfFinishAddress);
         radio.stopListening();
         Serial.println("Role set to TRANSMITTER");
     }
@@ -1139,6 +1162,8 @@ void resetMeasurement(Measurement &measurement) {
     measurement.qrCode = "";
     measurement.robotName = "";
 
+    measurement.rfidScanned = false;
+
     measurement.synchroCounter = 0;
     measurement.synchroSuccess = 0;
     measurement.timeZero = 0;
@@ -1157,3 +1182,47 @@ void resetMeasurement(Measurement &measurement) {
     measurement.wrongRobotCommand = "";
     measurement.wrongRobotMessage = "";
   }
+
+
+void checkConnection() {
+  if (WiFi.status() != WL_CONNECTED) {
+    reconnectWiFi();
+    
+  }
+
+  if (!client.connected()) {
+    if (connectToServer()) {
+    FirebaseJson data;
+    data.set("serial_number", GATE_SERIAL_NUMBER);
+    sendJsonMessage("GET_SETTINGS", data);
+    }
+  }
+}
+
+void handleUserReset() 
+{
+  static unsigned long lastResetTime = 0; // Static pozwala na przechowanie wartości między wywołaniami funkcji
+  unsigned long currentTime = millis();
+
+  // Sprawdzenie, czy od ostatniego wywołania minęły 2 sekundy
+  if (currentTime - lastResetTime < 2000) 
+  {
+    return; // Jeśli nie minęły 2 sekundy, zakończ funkcję
+  }
+
+  if (digitalRead(BUTTON_ACCEPT_PIN) == LOW) 
+  {
+    if (digitalRead(BUTTON_CANCEL_PIN) == LOW) 
+    {
+      if (digitalRead(BUTTON_FORFEIT_PIN) == LOW) 
+      {
+        FirebaseJson data;
+        data.set("RESET", true);
+        sendJsonMessage("RESET", data);
+        resetMeasurement(currMeasurement);
+
+        lastResetTime = currentTime; // Zaktualizowanie czasu ostatniego wywołania
+      }
+    } 
+  }
+}

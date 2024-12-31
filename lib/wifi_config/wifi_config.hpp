@@ -7,8 +7,6 @@
 
 
 
-
-void checkConnection();
 bool connectToWiFi();
 bool reconnectWiFi();
 bool resolveServerIP();

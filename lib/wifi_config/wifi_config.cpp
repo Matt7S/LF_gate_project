@@ -11,15 +11,7 @@ const int   MY_SERVER_PORT = 1234;
 IPAddress MY_SERVER_IP; // IP serwera
 WiFiClient client; // TCP client object
 
-void checkConnection() {
-  if (WiFi.status() != WL_CONNECTED) {
-    reconnectWiFi();
-  }
 
-  if (!client.connected()) {
-    connectToServer();
-  }
-}
 
 bool connectToWiFi() {
   WiFi.begin(MY_WIFI_SSID, MY_WIFI_PASSWORD);
