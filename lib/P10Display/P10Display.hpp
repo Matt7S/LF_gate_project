@@ -16,6 +16,40 @@ private:
     uint8_t pinLATCH;
     uint8_t pinOE;
 
+
+    String line1String = "";
+    String line2String = "";
+    bool line1Scroll = false;
+    bool line2Scroll = false;
+    uint8_t line1Speed = 0;
+    uint8_t line2Speed = 0;
+    bool line1Show = true;
+    bool line2Show = true;
+    bool line1Showtimer = false;
+    bool line2Showtimer = false;
+    uint8_t line1Position = 0;
+    uint8_t line2Position = 0;
+    // Miganie linii 1
+    bool line1Blink = false;               // Czy linia 1 ma migać
+    bool line1BlinkState = true;           // Aktualny stan widoczności linii 1
+    uint16_t line1BlinkInterval = 500;     // Interwał migania linii 1 w ms
+    uint64_t line1LastBlinkTime = 0;       // Czas ostatniej zmiany stanu migania linii 1
+
+    // Miganie linii 2
+    bool line2Blink = false;               // Czy linia 2 ma migać
+    bool line2BlinkState = true;           // Aktualny stan widoczności linii 2
+    uint16_t line2BlinkInterval = 500;     // Interwał migania linii 2 w ms
+    uint64_t line2LastBlinkTime = 0;       // Czas ostatniej zmiany stanu migania linii 2
+
+
+    uint8_t startingScrollOffset = 20;
+
+    uint16_t refresh_time_ms; 
+    uint8_t counter_m;
+    uint8_t counter_s;
+    uint8_t counter_ms;
+
+
     // Aktualny wiersz wyświetlacza
     uint8_t refresh_row = 0;
     bool user_buffer[16][32] = {}; 
@@ -59,16 +93,25 @@ public:
      * @param miliseconds Czas w milisekundach
      * @param output Opowiednio ustawione piksele timera 5x32
      */
-    void default_timer_screen(uint16_t refresh_time_ms, uint8_t counter_m, uint8_t counter_s, uint8_t counter_ms);
+    void default_timer_screen();
 
     void drawStaticText(const char* text, uint8_t x, uint8_t y);
     void drawStaticText(String text, uint8_t x, uint8_t y);
 
     void scrollLine1(const char* text, uint8_t y, uint16_t scroll_speed_ms);
     void scrollLine1(String text, uint8_t y, uint16_t scroll_speed_ms);
-
     void scrollLine2(const char* text, uint8_t y, uint16_t scroll_speed_ms);
     void scrollLine2(String text, uint8_t y, uint16_t scroll_speed_ms);
+
+    void setLineDynamic(uint8_t line, String text, bool scroll, uint8_t speed, bool show);
+    void setLineStatic(uint8_t line, String text, uint8_t position, bool show);
+    void setTimer(uint8_t line, uint32_t refresh_time_ms);
+    void updateTime(uint8_t minutes, uint8_t seconds, uint8_t miliseconds);
+    void updateDisplay();
+    void clearTopPart();
+    void clearBottomPart();
+    void startBlinking(uint8_t line, uint16_t interval_ms);
+    void stopBlinking(uint8_t line);
 
     
 };

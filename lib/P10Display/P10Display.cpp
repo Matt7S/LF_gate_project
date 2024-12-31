@@ -139,8 +139,57 @@ void P10Display::default_timer(uint8_t minutes, uint8_t seconds, uint8_t millise
 }
 
 
+/*
+void P10Display::default_timer_screen() {
+    static uint64_t last_refresh = 0;
 
-void P10Display::default_timer_screen(uint16_t refresh_time_ms, uint8_t counter_m, uint8_t counter_s, uint8_t counter_ms) {
+    if (millis() - last_refresh > refresh_time_ms) {
+        byte pixelArray[5][32] = {0};
+        default_timer(counter_m, counter_s, counter_ms, pixelArray);
+
+        // Clear the entire buffer
+        for (int i = 0; i < 16; i++) {
+            for (int j = 0; j < 32; j++) {
+                user_buffer[i][j] = 0;
+            }
+        }
+
+        if (line1Showtimer && line2Showtimer) {
+            // Copy to both top and bottom parts, centered vertically
+            for (int i = 0; i < 5; i++) {
+                for (int j = 0; j < 32; j++) {
+                    if (i < 4) {
+                        user_buffer[i + 2][j] = pixelArray[i][j]; // Center vertically for top part
+                        user_buffer[i + 10][j] = pixelArray[i][j]; // Center vertically for bottom part
+                    }
+                }
+            }
+        } else if (line1Showtimer) {
+            // Copy to top part, centered vertically
+            for (int i = 0; i < 5; i++) {
+                for (int j = 0; j < 32; j++) {
+                    if (i < 4) {
+                        user_buffer[i + 2][j] = pixelArray[i][j]; // Center vertically for top part
+                    }
+                }
+            }
+        } else if (line2Showtimer) {
+            // Copy to bottom part, centered vertically
+            for (int i = 0; i < 5; i++) {
+                for (int j = 0; j < 32; j++) {
+                    if (i < 4) {
+                        user_buffer[i + 10][j] = pixelArray[i][j]; // Center vertically for bottom part
+                    }
+                }
+            }
+        }
+
+        last_refresh = millis();
+    }
+}
+*/
+
+void P10Display::default_timer_screen() {
   static uint64_t last_refresh = 0;
   
   if (millis() - last_refresh > refresh_time_ms) {
@@ -188,15 +237,16 @@ void P10Display::drawStaticText(const char* text, uint8_t x, uint8_t y) {
 
 
 void P10Display::scrollLine1(const char* text, uint8_t y, uint16_t scroll_speed_ms) {
+    int start_offset = startingScrollOffset;
     static uint64_t last_scroll_time = 0;
     static int scroll_offset = 0;
 
     static String last_text = ""; // Przechowuje ostatni tekst
 
     // Sprawdzenie, czy tekst się zmienił
-    if (last_text != text) {
-        last_text = text; // Aktualizacja ostatniego tekstu
-        scroll_offset = 0; // Resetowanie przesunięcia
+    if (last_text != String(text)) {
+        last_text = String(text); // Aktualizacja ostatniego tekstu
+        scroll_offset = -start_offset; // Resetowanie przesunięcia z uwzględnieniem start_offset
     }
 
     // Obliczenie szerokości tekstu
@@ -231,7 +281,7 @@ void P10Display::scrollLine1(const char* text, uint8_t y, uint16_t scroll_speed_
     // Aktualizacja scrollowania
     if (millis() - last_scroll_time > scroll_speed_ms) {
         scroll_offset++;
-        if (scroll_offset > textWidth) {
+        if (scroll_offset > textWidth + start_offset) {
             scroll_offset = -32; // Reset przewijania
         }
         last_scroll_time = millis();
@@ -239,15 +289,20 @@ void P10Display::scrollLine1(const char* text, uint8_t y, uint16_t scroll_speed_
 }
 
 
+
+
+
 void P10Display::scrollLine2(const char* text, uint8_t y, uint16_t scroll_speed_ms) {
+    int start_offset = startingScrollOffset;
     static uint64_t last_scroll_time = 0;
     static int scroll_offset = 0;
 
     static String last_text = ""; // Przechowuje ostatni tekst
 
-    if (last_text != text) {
-        last_text = text; // Aktualizacja ostatniego tekstu
-        scroll_offset = 0; // Resetowanie przesunięcia
+    // Sprawdzenie, czy tekst się zmienił
+    if (last_text != String(text)) {
+        last_text = String(text); // Aktualizacja ostatniego tekstu
+        scroll_offset = -start_offset; // Resetowanie przesunięcia z uwzględnieniem start_offset
     }
 
     // Obliczenie szerokości tekstu
@@ -282,7 +337,7 @@ void P10Display::scrollLine2(const char* text, uint8_t y, uint16_t scroll_speed_
     // Aktualizacja scrollowania
     if (millis() - last_scroll_time > scroll_speed_ms) {
         scroll_offset++;
-        if (scroll_offset > textWidth) {
+        if (scroll_offset > textWidth + start_offset) {
             scroll_offset = -32; // Reset przewijania
         }
         last_scroll_time = millis();
@@ -304,4 +359,166 @@ void P10Display::scrollLine1(String text, uint8_t y, uint16_t scroll_speed_ms) {
 
 void P10Display::scrollLine2(String text, uint8_t y, uint16_t scroll_speed_ms) {
     scrollLine2((char*)text.c_str(), y, scroll_speed_ms);
+}
+
+
+void P10Display::setLineDynamic(uint8_t line, String text, bool scroll, uint8_t speed, bool show) {
+    if (line == 0) {
+        line1String = text;
+        line1Scroll = scroll;
+        line1Speed = speed;
+        line1Show = show;
+        line1Showtimer = false;
+    } else if (line == 1) {
+        line2String = text;
+        line2Scroll = scroll;
+        line2Speed = speed;
+        line2Show = show;
+        line2Showtimer = false;
+    }
+}
+
+void P10Display::setLineStatic(uint8_t line, String text, uint8_t position, bool show) {
+    if (line == 0) {
+        line1String = text;
+        line1Scroll = false;
+        line1Speed = 0;
+        line1Show = show;
+        line1Showtimer = false;
+        line1Position = position;
+    } else if (line == 1) {
+        line2String = text;
+        line2Scroll = false;
+        line2Speed = 0;
+        line2Show = show;
+        line2Showtimer = false;
+        line2Position = position;
+    }
+}
+
+void P10Display::setTimer(uint8_t line, uint32_t refresh_time_ms) {
+    if (line == 0) {
+        line1String = "";
+        line1Scroll = false;
+        line1Speed = 0;
+        line1Show = true;
+        line1Showtimer = true;
+        line1Position = 0;
+        // Additional logic to set the timer values can be added here
+    } else if (line == 1) {
+        line1String = "";
+        line2Scroll = false;
+        line2Speed = 0;
+        line2Show = true;
+        line2Showtimer = true;
+        line2Position = 0;
+        // Additional logic to set the timer values can be added here
+    }
+}
+
+void P10Display::updateTime(uint8_t minutes, uint8_t seconds, uint8_t miliseconds) {
+    counter_m = minutes;
+    counter_s = seconds;
+    counter_ms = miliseconds;
+}
+
+
+void P10Display::clearTopPart() {
+    for (int i = 0; i < 8; i++) { // Górna część to pierwsze 8 wierszy
+        for (int j = 0; j < 32; j++) {
+            user_buffer[i][j] = 0; // Czyszczenie pikseli
+        }
+    }
+}
+
+void P10Display::clearBottomPart() {
+    for (int i = 8; i < 16; i++) { // Dolna część to wiersze od 8 do 15
+        for (int j = 0; j < 32; j++) {
+            user_buffer[i][j] = 0; // Czyszczenie pikseli
+        }
+    }
+}
+
+
+void P10Display::startBlinking(uint8_t line, uint16_t interval_ms) {
+    if (line == 0) {
+        line1Blink = true;
+        line1BlinkInterval = interval_ms;
+        line1LastBlinkTime = millis();
+        line1BlinkState = true; // Początkowy stan widoczności tekstu
+    } else if (line == 1) {
+        line2Blink = true;
+        line2BlinkInterval = interval_ms;
+        line2LastBlinkTime = millis();
+        line2BlinkState = true; // Początkowy stan widoczności tekstu
+    }
+}
+
+void P10Display::stopBlinking(uint8_t line) {
+    if (line == 0) {
+        line1Blink = false;
+        line1BlinkState = true; // Upewnij się, że tekst jest widoczny po zatrzymaniu migania
+    } else if (line == 1) {
+        line2Blink = false;
+        line2BlinkState = true; // Upewnij się, że tekst jest widoczny po zatrzymaniu migania
+    }
+}
+
+
+void P10Display::updateDisplay() {
+    // Aktualizacja migania dla linii 1
+    if (line1Blink) {
+        if (millis() - line1LastBlinkTime > line1BlinkInterval) {
+            line1BlinkState = !line1BlinkState; // Zmień stan migania
+            line1LastBlinkTime = millis();
+        }
+    }
+
+    // Aktualizacja migania dla linii 2
+    if (line2Blink) {
+        if (millis() - line2LastBlinkTime > line2BlinkInterval) {
+            line2BlinkState = !line2BlinkState; // Zmień stan migania
+            line2LastBlinkTime = millis();
+        }
+    }
+
+    // Handle line 1
+    if (line1Show) {
+        if (line1Blink && !line1BlinkState) {
+            clearTopPart(); // Jeśli linia ma migać i jest w stanie "ukrytym"
+        } else {
+            if (line1Showtimer) {
+                default_timer_screen();
+            } else {
+                if (line1Scroll) {
+                    scrollLine1(line1String, 0, line1Speed);
+                } else {
+                    drawStaticText(line1String, line1Position, 0);
+                }
+            }
+        }
+    } else {
+        clearTopPart();
+    }
+
+    // Handle line 2
+    if (line2Show) {
+        if (line2Blink && !line2BlinkState) {
+            clearBottomPart(); // Jeśli linia ma migać i jest w stanie "ukrytym"
+        } else {
+            if (line2Showtimer) {
+                default_timer_screen(); // Adjust position as needed
+            } else {
+                if (line2Scroll) {
+                    scrollLine2(line2String, 8, line2Speed);
+                } else {
+                    drawStaticText(line2String, line2Position, 8);
+                }
+            }
+        }
+    } else {
+        clearBottomPart();
+    }
+
+    refresh();
 }
