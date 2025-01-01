@@ -37,6 +37,7 @@ enum State {
     STARTED,
     FINISH_WAITING,
     FINISHED,
+    CONFIRMATION_WAITING,
     CONFIRMATION,
     RESET_WAITING,
     RESETING
@@ -45,10 +46,16 @@ enum State {
 
 
 struct Measurement {
-  String cardNumber = "";
-  String userName = "";
-  String qrCode = "";
+  String playerCardCode = "";
+  String playerName = "";
+  uint8_t playerID = 0;
+
+  String robotQrCode = "";
   String robotName = "";
+  uint8_t robotID = 0;
+
+  String judgeCardNumber = "";
+  uint8_t judgeID = 0;
 
   bool rfidScanned = false;
 
@@ -59,18 +66,20 @@ struct Measurement {
 
   uint32_t start_time_interrupt = 0;
   uint32_t finish_time_interrupt = 0;
+  uint32_t final_time = 0;
+
   bool start_time_status = false;
   bool finish_time_status = false;
 
   bool getUserRecieved =  false;
-  bool userFound = false;
-
   bool getRobotRecieved = false;
-  bool robotFound = false;
-  String wrongRobotCommand = "";
-  String wrongRobotMessage = "";
+  bool retryJudgeRecieved = false;
+  bool getJudgeRecieved = false;
+  bool retryScoreRecieved = false;
 
+  bool resetCommandSend = false;
   
+  String lastMessage = "";
 };
 
 
@@ -93,7 +102,6 @@ bool handleServerResponse(String command);
 
 uint32_t requestTimeWithRetries(uint8_t maxRetries, unsigned long waitDuration);
 bool sendTime(uint32_t time);
-void setRole(String gateType);
 void listenForSignals();
 bool synchronize_time_receiver(uint32_t last_received_interrupt_time);
 bool synchronize_time_transmitter();
