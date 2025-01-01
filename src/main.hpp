@@ -37,6 +37,7 @@ enum State {
     STARTED,
     FINISH_WAITING,
     FINISHED,
+    COUNT_RESULT,
     CONFIRMATION_WAITING,
     CONFIRMATION,
     RESET_WAITING,
@@ -54,22 +55,27 @@ struct Measurement {
   String robotName = "";
   uint8_t robotID = 0;
 
-  String judgeCardNumber = "";
+  String judgeCardCode = "";
   uint8_t judgeID = 0;
 
-  bool rfidScanned = false;
+  uint32_t NRFInterruptTime = 0;
+  bool NRFInterruptFlag = false;
 
   uint8_t synchroCounter = 0;
   bool synchroSuccess = 0;
-  uint32_t timeZero = 0;
+  uint32_t synchroTime = 0;
   int32_t timeDiffrence = 0;
 
-  uint32_t start_time_interrupt = 0;
-  uint32_t finish_time_interrupt = 0;
-  uint32_t final_time = 0;
+  uint32_t startInterruptTime = 0;
+  uint32_t finishInterruptTime = 0;
+  bool startInterruptFlag = false;
+  bool finishInterruptFlag = false;
 
-  bool start_time_status = false;
-  bool finish_time_status = false;
+  int8_t counter_m = 0;
+  int8_t counter_s = 0;
+  int8_t counter_ms = 0;
+  String finalFormatedTime = "";
+  uint32_t finalTime = 0;
 
   bool getUserRecieved =  false;
   bool getRobotRecieved = false;
@@ -78,7 +84,6 @@ struct Measurement {
   bool retryScoreRecieved = false;
 
   bool resetCommandSend = false;
-  
   String lastMessage = "";
 };
 
@@ -98,7 +103,7 @@ bool processQRCode(uint32_t scanEveryMs, String &qrCode);
 bool waitForNextState(unsigned long interval);
 void sendJsonMessage(const char* command, FirebaseJson& data);
 
-bool handleServerResponse(String command);
+bool handleServerResponse();
 
 uint32_t requestTimeWithRetries(uint8_t maxRetries, unsigned long waitDuration);
 bool sendTime(uint32_t time);

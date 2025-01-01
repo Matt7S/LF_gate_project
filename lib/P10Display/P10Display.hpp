@@ -49,6 +49,9 @@ private:
     uint8_t counter_s;
     uint8_t counter_ms;
 
+    bool update_timer = false;
+    uint32_t given_time_us = 0;
+
 
     // Aktualny wiersz wyświetlacza
     uint8_t refresh_row = 0;
@@ -83,7 +86,7 @@ public:
      * @param miliseconds Czas w milisekundach
      * @param output Opowiednio ustawione piksele timera 5x32
      */
-    void default_timer(uint8_t minutes, uint8_t seconds, uint8_t milliseconds, byte output[5][32]);
+    void default_timer(byte output[5][32]);
 
 
     /**
@@ -105,13 +108,13 @@ public:
 
     void setLineDynamic(uint8_t line, String text, bool scroll, uint8_t speed, bool show);
     void setLineStatic(uint8_t line, String text, uint8_t position, bool show);
-    void setTimer(uint8_t line, uint32_t refresh_time_ms);
-    void updateTime(uint8_t minutes, uint8_t seconds, uint8_t miliseconds);
+    void setTimer(uint8_t line, bool update, uint32_t givenTimerUs, uint32_t refresh_time_ms);
     void updateDisplay();
     void clearTopPart();
     void clearBottomPart();
     void startBlinking(uint8_t line, uint16_t interval_ms);
     void stopBlinking(uint8_t line);
+    void countTime();
 
     
 };

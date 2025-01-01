@@ -99,7 +99,7 @@ void P10Display::refresh() {
 }
 
 
-void P10Display::default_timer(uint8_t minutes, uint8_t seconds, uint8_t milliseconds, byte output[5][32]) {
+void P10Display::default_timer(byte output[5][32]) {
   // Funkcja pomocnicza do wstawiania cyfr do tablicy pikseli
   auto addDigit = [&](int digit, int colOffset) {
     for (int row = 0; row < 5; row++) {
@@ -117,23 +117,23 @@ void P10Display::default_timer(uint8_t minutes, uint8_t seconds, uint8_t millise
   };
 
   // Minuty
-  addDigit(minutes / 10, 0);    // Pierwsza cyfra minut
-  addDigit(minutes % 10, 4);    // Druga cyfra minut
+  addDigit(counter_m / 10, 0);    // Pierwsza cyfra minut
+  addDigit(counter_m % 10, 4);    // Druga cyfra minut
 
   // Separator
   addSeparator(8);
 
   // Sekundy
-  addDigit(seconds / 10, 10);   // Pierwsza cyfra sekund
-  addDigit(seconds % 10, 14);   // Druga cyfra sekund
+  addDigit(counter_s / 10, 10);   // Pierwsza cyfra sekund
+  addDigit(counter_s % 10, 14);   // Druga cyfra sekund
 
   // Separator
   addSeparator(18);
 
   // Milisekundy (tylko pierwsze trzy cyfry)
-  addDigit(milliseconds / 100, 20);              // Setki milisekund
-  addDigit((milliseconds / 10) % 10, 24);        // Dziesiątki milisekund
-  addDigit(milliseconds % 10, 28);               // Jednostki milisekund
+  addDigit(counter_ms / 100, 20);              // Setki milisekund
+  addDigit((counter_ms / 10) % 10, 24);        // Dziesiątki milisekund
+  addDigit(counter_ms % 10, 28);               // Jednostki milisekund
 
 
 }
@@ -194,7 +194,7 @@ void P10Display::default_timer_screen() {
   
   if (millis() - last_refresh > refresh_time_ms) {
     byte pixelArray[5][32] = {0};
-    default_timer(counter_m, counter_s, counter_ms, pixelArray);
+    default_timer(pixelArray);
 
     for (int i = 0; i < 5; i++) {
       for (int j = 0; j < 32; j++) {
@@ -396,7 +396,9 @@ void P10Display::setLineStatic(uint8_t line, String text, uint8_t position, bool
     }
 }
 
-void P10Display::setTimer(uint8_t line, uint32_t refresh_time_ms) {
+void P10Display::setTimer(uint8_t line, bool update, uint32_t givenTimeUs, uint32_t refresh_time_ms) {
+    update_timer = update;
+    given_time_us = givenTimeUs;
     if (line == 0) {
         line1String = "";
         line1Scroll = false;
@@ -414,12 +416,6 @@ void P10Display::setTimer(uint8_t line, uint32_t refresh_time_ms) {
         line2Position = 0;
         // Additional logic to set the timer values can be added here
     }
-}
-
-void P10Display::updateTime(uint8_t minutes, uint8_t seconds, uint8_t miliseconds) {
-    counter_m = minutes;
-    counter_s = seconds;
-    counter_ms = miliseconds;
 }
 
 
@@ -488,11 +484,14 @@ void P10Display::updateDisplay() {
             clearTopPart(); // Jeśli linia ma migać i jest w stanie "ukrytym"
         } else {
             if (line1Showtimer) {
+                clearTopPart();
+                countTime(); // Adjust position as needed
                 default_timer_screen();
             } else {
                 if (line1Scroll) {
                     scrollLine1(line1String, 0, line1Speed);
                 } else {
+                    clearTopPart();
                     drawStaticText(line1String, line1Position, 0);
                 }
             }
@@ -507,11 +506,14 @@ void P10Display::updateDisplay() {
             clearBottomPart(); // Jeśli linia ma migać i jest w stanie "ukrytym"
         } else {
             if (line2Showtimer) {
+                clearBottomPart();
+                countTime();
                 default_timer_screen(); // Adjust position as needed
             } else {
                 if (line2Scroll) {
                     scrollLine2(line2String, 8, line2Speed);
                 } else {
+                    clearBottomPart();
                     drawStaticText(line2String, line2Position, 8);
                 }
             }
@@ -521,4 +523,21 @@ void P10Display::updateDisplay() {
     }
 
     refresh();
+}
+
+void P10Display::countTime() {
+    uint32_t given_time_ms = (given_time_us / 1000);  
+  
+    if (update_timer) {
+        uint32_t currentTime = millis();
+        // Odcinamy 3 ostatnie zera (optymalnie)
+        counter_m = ((currentTime - given_time_ms) / 60000) % 60;       // Minuty (każde 60 000 ms to 1 minuta)
+        counter_s = ((currentTime - given_time_ms) / 1000) % 60;        // Sekundy (każde 1000 ms to 1 sekunda)
+        counter_ms = (currentTime - given_time_ms) % 1000;              // Milisekundy (reszta z dzielenia przez 1000)
+    }
+    else {       // Odcinamy 3 ostatnie zera (optymalnie)
+        counter_m = ((given_time_ms) / 60000) % 60;       // Minuty (każde 60 000 ms to 1 minuta)
+        counter_s = ((given_time_ms) / 1000) % 60;        // Sekundy (każde 1000 ms to 1 sekunda)
+        counter_ms = (given_time_ms) % 1000;              // Milisekundy (reszta z dzielenia przez 1000)
+    }
 }
