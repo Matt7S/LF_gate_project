@@ -45,12 +45,12 @@ private:
     uint8_t startingScrollOffset = 20;
 
     uint16_t refresh_time_ms; 
-    uint8_t counter_m;
-    uint8_t counter_s;
-    uint8_t counter_ms;
+    uint32_t counter_m;
+    uint32_t counter_s;
+    uint32_t counter_ms;
 
     bool update_timer = false;
-    uint32_t given_time_us = 0;
+    uint64_t given_time_us = 0;
 
 
     // Aktualny wiersz wyświetlacza
@@ -108,7 +108,7 @@ public:
 
     void setLineDynamic(uint8_t line, String text, bool scroll, uint8_t speed, bool show);
     void setLineStatic(uint8_t line, String text, uint8_t position, bool show);
-    void setTimer(uint8_t line, bool update, uint32_t givenTimerUs, uint32_t refresh_time_ms);
+    void setTimer(uint8_t line, bool update, uint64_t givenTimerUs, uint32_t refresh_time_ms);
     void updateDisplay();
     void clearTopPart();
     void clearBottomPart();

@@ -10,7 +10,7 @@
 #include "P10Display.hpp"
 #include "main.hpp"
 
-#define GATE_SERIAL_NUMBER 1
+
 #define BARCODE_SCANNER_PRESENT_PIN 0
 // Define pins for SPI
 #define SPI0_PIN_SCK 2
@@ -46,6 +46,9 @@
 #define BUTTON_SKIP_TIME 500
 
 Gate gate;
+Gate newGateSettings;
+bool newSettingsAvailiable = false;
+
 Measurement currMeasurement;
 State currentState = IDLE;
 extern WiFiClient client; 
@@ -75,6 +78,7 @@ void setup() {
   pinMode(BUTTON_ACCEPT_PIN, INPUT_PULLUP);
   pinMode(BUTTON_CANCEL_PIN, INPUT_PULLUP); 
   pinMode(BUTTON_FORFEIT_PIN, INPUT_PULLUP);
+  pinMode(NRF_INTERRUPT, INPUT_PULLUP);
   
   pinMode(LED_GREEN, OUTPUT);
   pinMode(LED_RED, OUTPUT);
@@ -150,6 +154,7 @@ void loop() {
   //                                       CASE IDLE
   case IDLE:  // Handle idle state
   {
+    applyNewGateSettings();
     Serial.println("IDLE");
     if (gate.requiredUserCard && gate.requiredUserQrCode) 
     {
@@ -188,6 +193,12 @@ void loop() {
       {
         currentState = RFID_SCANNED;
         Serial.println("RFID_SCANNED");
+      }
+      if (newSettingsAvailiable) 
+      {
+        currentState = IDLE;
+        Serial.println("IDLE");
+        break;
       }
     }
     break;
@@ -232,7 +243,7 @@ void loop() {
       {
         currentState = QR_WAITING;
         Serial.println("QR_WAITING");
-        qr.setMode(true);
+        //qr.setMode(true);
       }
     } 
     else
@@ -285,11 +296,6 @@ void loop() {
       }
     }
   }
-    
-    
-
-    
-    
     break;
 
   //                                       CASE QR_SCANNED
@@ -401,6 +407,7 @@ void loop() {
       if (currMeasurement.finishInterruptFlag) 
       {
         currMeasurement.finalTime = currMeasurement.finishInterruptTime - currMeasurement.startInterruptTime;
+        Serial.println(currMeasurement.finalTime);
         display.setTimer(0, 0, currMeasurement.finalTime, 66);
         currentState = FINISHED;
         Serial.println("FINISHED"); 
@@ -430,10 +437,12 @@ void loop() {
   }
   case COUNT_RESULT:
   {
-    uint32_t timing = (currMeasurement.finalTime / 1000); // Odcinamy 3 ostatnie zera (optymalnie)
-    currMeasurement.counter_m = ((timing) / 60000) % 60;       // Minuty (każde 60 000 ms to 1 minuta)
-    currMeasurement.counter_s = ((timing) / 1000) % 60;        // Sekundy (każde 1000 ms to 1 sekunda)
-    currMeasurement.counter_ms = (timing) % 1000;   
+    Serial.println(currMeasurement.finalTime);
+    uint64_t timing = ((currMeasurement.finalTime + 500) / 1000); // Zaokrąglamy w góręi odcinamy końcowe 3 miejsca po przecinku
+    Serial.println(timing); 
+    currMeasurement.counter_m = (uint32_t)(((timing) / 60000)) % 60;       // Minuty (każde 60 000 ms to 1 minuta)
+    currMeasurement.counter_s = (uint32_t)(((timing) / 1000) % 60);        // Sekundy (każde 1000 ms to 1 sekunda)
+    currMeasurement.counter_ms = (uint32_t)((timing) % 1000);   
 
     char buffer[12]; // Tablica na wynik (maksymalnie 11 znaków + null terminator)
     Serial.println(currMeasurement.counter_m);
@@ -505,7 +514,7 @@ void loop() {
         data.set("result_time", currMeasurement.finalFormatedTime);
         data.set("category_id", gate.categoryID);
         data.set("stage_id", gate.stageID);
-        data.set("gate_id", gate.ID);
+        data.set("gate_id", GATE_SERIAL_NUMBER);
         if (gate.requiredConfirmation) 
         {
           data.set("judge_id", currMeasurement.judgeID);
@@ -567,9 +576,6 @@ void loop() {
       resetMeasurement(currMeasurement);
 
       currentState = IDLE;
-      FirebaseJson data;
-      data.set("serial_number", GATE_SERIAL_NUMBER);
-      sendJsonMessage("GET_SETTINGS", data);
     }
     break;
   }
@@ -614,21 +620,23 @@ void loop1() {
 
 void handleInterrupt() {
   currMeasurement.NRFInterruptFlag = true;
-  currMeasurement.NRFInterruptTime = micros();
+  currMeasurement.NRFInterruptTime = to_us_since_boot(get_absolute_time());
+  //Serial.print("NRF Interrupt: ");
+  //Serial.println(currMeasurement.NRFInterruptTime);
 }
 
 
 void handleInterruptIR() {
   if (gate.typeName == "START") {
-    currMeasurement.startInterruptTime = (uint32_t)micros();
+    currMeasurement.startInterruptTime = to_us_since_boot(get_absolute_time());
     currMeasurement.startInterruptFlag = 1;
-    Serial.println("START Interrupt");
-    Serial.println(currMeasurement.startInterruptTime);
+    //Serial.println("START Interrupt");
+    //Serial.println(currMeasurement.startInterruptTime);
   } else {
-    currMeasurement.finishInterruptTime = (uint32_t)micros();
+    currMeasurement.finishInterruptTime = to_us_since_boot(get_absolute_time());
     currMeasurement.finishInterruptFlag = 1;
-    Serial.println("FINISH Interrupt");
-    Serial.println(currMeasurement.finishInterruptTime);
+    //Serial.println("FINISH Interrupt");
+    //Serial.println(currMeasurement.finishInterruptTime);
   }
   detachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN));
 }
@@ -646,7 +654,7 @@ bool processQRCode(uint32_t scanEveryMs, String &qrCode) {
       {
         Serial.print("QR Code: ");
         Serial.println(qrCode);
-        qr.setMode(false);
+        //qr.setMode(false);
         return true;
 
         
@@ -772,60 +780,31 @@ bool handleServerResponse() {
     
     if (command == "SETTINGS") //                                                HANDLE SETTINGS
     {
-      String startAddress, finishAddress;
-      if (daJson.get(jsonData, "pair_id")) { gate.pairID = jsonData.intValue; }
-      if (daJson.get(jsonData, "active")) { gate.active = jsonData.boolValue; }
-      if (daJson.get(jsonData, "start_gate_id")) { gate.startGateID = jsonData.intValue; }
-      if (daJson.get(jsonData, "finish_gate_id")) { gate.finishGateID = jsonData.intValue; }
-      if (daJson.get(jsonData, "category_id")) { gate.categoryID = jsonData.intValue; }
-      if (daJson.get(jsonData, "stage_id")) { gate.stageID = jsonData.intValue; }
-      if (daJson.get(jsonData, "start_nrf")) {
-          startAddress = jsonData.stringValue;
-          strncpy((char*)gate.nrfStartAddress, startAddress.c_str(), sizeof(gate.nrfStartAddress) - 1);
-      }
-      if (daJson.get(jsonData, "finish_nrf")) {
-          finishAddress = jsonData.stringValue;
-          strncpy((char*)gate.nrfFinishAddress, finishAddress.c_str(), sizeof(gate.nrfFinishAddress) - 1);
-      }
-      if (daJson.get(jsonData, "requires_user_card")) { gate.requiredUserCard = jsonData.boolValue; }
-      if (daJson.get(jsonData, "requires_user_qr_code")) { gate.requiredUserQrCode = jsonData.boolValue; }
-      if (daJson.get(jsonData, "requires_judge_confirmation")) { gate.requiredConfirmation = jsonData.boolValue; }
-      if (daJson.get(jsonData, "category_name")) { gate.categoryName = jsonData.stringValue; }
-      if (daJson.get(jsonData, "stage_name")) { gate.stageName = jsonData.stringValue; }
-      if (daJson.get(jsonData, "gate_type")) { gate.typeName = jsonData.stringValue; }
+    newSettingsAvailiable = true; // Resetuj flagę
+    String startAddress, finishAddress;
+    if (daJson.get(jsonData, "pair_id")) { newGateSettings.pairID = jsonData.intValue; }
+    if (daJson.get(jsonData, "active")) { newGateSettings.active = jsonData.boolValue; }
+    if (daJson.get(jsonData, "start_gate_id")) { newGateSettings.startGateID = jsonData.intValue; }
+    if (daJson.get(jsonData, "finish_gate_id")) { newGateSettings.finishGateID = jsonData.intValue; }
+    if (daJson.get(jsonData, "category_id")) { newGateSettings.categoryID = jsonData.intValue; }
+    if (daJson.get(jsonData, "stage_id")) { newGateSettings.stageID = jsonData.intValue; }
+    if (daJson.get(jsonData, "start_nrf")) {
+      startAddress = jsonData.stringValue;
+      strncpy((char*)newGateSettings.nrfStartAddress, startAddress.c_str(), sizeof(newGateSettings.nrfStartAddress) - 1);
+    }
+    if (daJson.get(jsonData, "finish_nrf")) {
+      finishAddress = jsonData.stringValue;
+      strncpy((char*)newGateSettings.nrfFinishAddress, finishAddress.c_str(), sizeof(newGateSettings.nrfFinishAddress) - 1);
+    }
 
-      // Wyświetlanie ustawień
-      Serial.println("Ustawienia:");
-      Serial.print("pairID: "); Serial.println(gate.pairID);
-      Serial.print("isActive: "); Serial.println(gate.active);
-      Serial.print("startGateID: "); Serial.println(gate.startGateID);
-      Serial.print("finishGateID: "); Serial.println(gate.finishGateID);
-      Serial.print("categoryID: "); Serial.println(gate.categoryID);
-      Serial.print("stageID: "); Serial.println(gate.stageID);
-      Serial.print("nrfStartAddress: "); Serial.println(startAddress);
-      Serial.print("nrfFinishAddress: "); Serial.println(finishAddress);
-      Serial.print("requiredUserCard: "); Serial.println(gate.requiredUserCard);
-      Serial.print("requiredUserQrCode: "); Serial.println(gate.requiredUserQrCode);
-      Serial.print("requiredConfirmation: "); Serial.println(gate.requiredConfirmation);
-      Serial.print("categoryName: "); Serial.println(gate.categoryName);
-      Serial.print("stageName: "); Serial.println(gate.stageName);
-      Serial.print("gateType: "); Serial.println(gate.typeName);
+    if (daJson.get(jsonData, "requires_user_card")) { newGateSettings.requiredUserCard = jsonData.boolValue; }
+    if (daJson.get(jsonData, "requires_user_qr_code")) { newGateSettings.requiredUserQrCode = jsonData.boolValue; }
+    if (daJson.get(jsonData, "requires_judge_confirmation")) { newGateSettings.requiredConfirmation = jsonData.boolValue; }
+    if (daJson.get(jsonData, "category_name")) { newGateSettings.categoryName = jsonData.stringValue; }
+    if (daJson.get(jsonData, "stage_name")) { newGateSettings.stageName = jsonData.stringValue; }
+    if (daJson.get(jsonData, "gate_type")) { newGateSettings.typeName = jsonData.stringValue; }
 
-      if (gate.typeName == "START") {
-        gate.start = true;
-        radio.openWritingPipe(gate.nrfStartAddress);
-        radio.openReadingPipe(1, gate.nrfFinishAddress);
-        radio.stopListening();
-        Serial.println("Role set to TRANSMITTER");
-      }
-      if (gate.typeName == "FINISH") {
-        gate.finish = true;
-        radio.openWritingPipe(gate.nrfFinishAddress);
-        radio.openReadingPipe(1, gate.nrfStartAddress);
-        radio.startListening();
-        Serial.println("Role set to RECEIVER");
-      }
-
+    
     } 
     else if (command == "USER") //                                                HANDLE USER
     {
@@ -905,6 +884,7 @@ void listenForSignals() {
                 break;
             }
             Serial.println("Time synchronization command received");
+            Serial.println(nrf_data.time);
             currMeasurement.synchroSuccess = synchronize_time_receiver(currMeasurement.NRFInterruptTime);
             break;  
 
@@ -916,13 +896,13 @@ void listenForSignals() {
         case 0x03: // Assuming 0x03 represents "START"
             Serial.println("START command received");
             currMeasurement.startInterruptFlag = 1;
-            currMeasurement.startInterruptTime = (uint32_t)nrf_data.time;
+            currMeasurement.startInterruptTime = nrf_data.time;
             break;
 
         case 0x04: // Assuming 0x04 represents "STOP"
             Serial.println("FINISH command received");
             currMeasurement.finishInterruptFlag = 1;
-            currMeasurement.finalTime = (uint32_t)nrf_data.time;
+            currMeasurement.finalTime = nrf_data.time;
             Serial.println(nrf_data.time);
             break;
 
@@ -937,20 +917,23 @@ void listenForSignals() {
 
 
 bool synchronize_time_transmitter() {
-    uint32_t receiverTime = 0;
-    uint32_t roundTripTimeStart = 0;
-    uint32_t roundTripTimeEnd = 0;
-    uint32_t roundTripTime = 0;
+    uint64_t receiverTime = 0;
+    uint64_t roundTripTimeStart = 0;
+    uint64_t roundTripTimeEnd = 0;
+    uint64_t roundTripTime = 0;
 
     currMeasurement.NRFInterruptFlag = false;
     currMeasurement.NRFInterruptTime = 0;
     currMeasurement.synchroTime = 0;
 
     radio.maskIRQ(false, true, true);
+    delay(10);
     
     Data_Package nrf_data;
     nrf_data.command = 0x01;
-    nrf_data.time = 0;
+    nrf_data.time = micros();
+    Serial.println("Sernding synchronization command");
+    Serial.println(nrf_data.time);
     radio.stopListening();
     if (!radio.write(&nrf_data, sizeof(Data_Package))) {
         Serial.println("Failed to send synchronization command.");
@@ -979,14 +962,14 @@ bool synchronize_time_transmitter() {
       Serial.println(nrf_data.command);
       Serial.println(nrf_data.time);
 
-      if (nrf_data.command != 123456789) {
-        Serial.println("Invalid command received.");
-        receiverTime = requestTimeWithRetries(10, 50000);
-      }
-      else {
+      //if (nrf_data.command != 123456789) {
+      //  Serial.println("Invalid command received.");
+      //  receiverTime = requestTimeWithRetries(10, 50000);
+      //}
+      //else {
         receiverTime = nrf_data.time;
-      }
-      currMeasurement.timeDiffrence = (int32_t)currMeasurement.synchroTime - (int32_t)receiverTime;
+      //}
+      currMeasurement.timeDiffrence = (int64_t)currMeasurement.synchroTime - (int64_t)receiverTime - 167;
       
       Serial.print("Transmitter time: \t");
       Serial.print(currMeasurement.synchroTime);
@@ -1010,13 +993,16 @@ bool synchronize_time_receiver(uint32_t last_received_interrupt_time) {
   currMeasurement.synchroTime = 0; 
   uint32_t synchro_time = last_received_interrupt_time;
   Data_Package nrf_data;
-  radio.flush_tx();
+  //radio.flush_tx();
   delayMicroseconds(5000);
-  nrf_data.command = 123456789; // Assuming 0x01 represents "TS"
+  nrf_data.command = 123456789; // 
   nrf_data.time = synchro_time;
   radio.stopListening();
   if (!radio.write(&nrf_data, sizeof(Data_Package))) {
     Serial.println("Failed to send current time.");
+    currMeasurement.synchroTime = 0;
+    currMeasurement.synchroSuccess = 0;
+    currMeasurement.NRFInterruptFlag = false;
     return false;
   }
   else {  
@@ -1030,7 +1016,7 @@ bool synchronize_time_receiver(uint32_t last_received_interrupt_time) {
 
 bool sendTime(uint32_t time) {
   Data_Package nrf_data;
-  nrf_data.command = 123456789; // Assuming 0x01 represents "TS"
+  nrf_data.command = 123456789;
   nrf_data.time = time;
   delayMicroseconds(5000);
   radio.stopListening();
@@ -1100,7 +1086,7 @@ uint32_t requestTimeWithRetries(uint8_t maxRetries, unsigned long waitDuration) 
 bool sendStartCommand() {
     Data_Package nrf_data;
     nrf_data.command = 0x03; // Assuming 0x02 represents "START"
-    nrf_data.time = (uint64_t)((int64_t)currMeasurement.startInterruptTime - (int64_t)currMeasurement.timeDiffrence);
+    nrf_data.time = (uint64_t)((int64_t)currMeasurement.startInterruptTime - currMeasurement.timeDiffrence);
     
     radio.stopListening();
     if (!radio.write(&nrf_data, sizeof(Data_Package))) {
@@ -1117,7 +1103,7 @@ bool sendFinishCommand() {
     Data_Package nrf_data;
     nrf_data.command = 0x04; // Assuming 0x03 represents "STOP"
 
-    nrf_data.time = (uint64_t)currMeasurement.finalTime;
+    nrf_data.time = currMeasurement.finalTime;
 
     radio.stopListening();
     if (!radio.write(&nrf_data, sizeof(Data_Package))) {
@@ -1234,4 +1220,63 @@ void handleUserReset()
       }
     } 
   }
+}
+
+
+void applyNewGateSettings() {
+  
+  if (!newSettingsAvailiable) {
+    return;
+  }
+  Serial.println("Applying new settings...");
+  newSettingsAvailiable = false;
+  // Przypisz wszystkie ustawienia z newGateSettings do gate
+  gate.pairID = newGateSettings.pairID;
+  gate.active = newGateSettings.active;
+  gate.startGateID = newGateSettings.startGateID;
+  gate.finishGateID = newGateSettings.finishGateID;
+  gate.categoryID = newGateSettings.categoryID;
+  gate.stageID = newGateSettings.stageID;
+  gate.requiredUserCard = newGateSettings.requiredUserCard;
+  gate.requiredUserQrCode = newGateSettings.requiredUserQrCode;
+  gate.requiredConfirmation = newGateSettings.requiredConfirmation;
+  gate.categoryName = newGateSettings.categoryName;
+  gate.stageName = newGateSettings.stageName;
+  gate.typeName = newGateSettings.typeName;
+  memcpy(gate.nrfStartAddress, newGateSettings.nrfFinishAddress, sizeof(newGateSettings.nrfFinishAddress));
+  memcpy(gate.nrfFinishAddress, newGateSettings.nrfStartAddress, sizeof(newGateSettings.nrfStartAddress));
+
+
+
+  // Konfiguracja bramki w zależności od typu
+  if (gate.typeName == "START") {
+      gate.start = true;
+      radio.openWritingPipe(gate.nrfStartAddress); // Adres startowy już przypisany w handleServerResponse
+      radio.openReadingPipe(1, gate.nrfFinishAddress); // Adres końcowy już przypisany w handleServerResponse
+      radio.stopListening();
+      Serial.println("Role set to TRANSMITTER");
+  } else if (gate.typeName == "FINISH") {
+      gate.finish = true;
+      radio.openWritingPipe(gate.nrfFinishAddress); // Adres końcowy już przypisany w handleServerResponse
+      radio.openReadingPipe(1, gate.nrfStartAddress); // Adres startowy już przypisany w handleServerResponse
+      radio.startListening();
+      Serial.println("Role set to RECEIVER");
+  }
+
+  // Dodatkowe logi dla debugowania
+  Serial.println("New settings applied:");
+  Serial.print("Pair ID: "); Serial.println(gate.pairID);
+  Serial.print("Active: "); Serial.println(gate.active);
+  Serial.print("Start Gate ID: "); Serial.println(gate.startGateID);
+  Serial.print("Finish Gate ID: "); Serial.println(gate.finishGateID);
+  Serial.print("Category ID: "); Serial.println(gate.categoryID);
+  Serial.print("Stage ID: "); Serial.println(gate.stageID);
+  Serial.print((char*)gate.nrfStartAddress);
+  Serial.print((char*)gate.nrfFinishAddress);
+  Serial.print("Required User Card: "); Serial.println(gate.requiredUserCard);
+  Serial.print("Required User QR Code: "); Serial.println(gate.requiredUserQrCode);
+  Serial.print("Required Confirmation: "); Serial.println(gate.requiredConfirmation);
+  Serial.print("Category Name: "); Serial.println(gate.categoryName);
+  Serial.print("Stage Name: "); Serial.println(gate.stageName);
+  Serial.print("Gate Type: "); Serial.println(gate.typeName);
 }

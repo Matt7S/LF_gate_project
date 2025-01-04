@@ -1,5 +1,6 @@
 #include <Arduino.h>
 
+#define GATE_SERIAL_NUMBER 2
 
 struct Data_Package {
     uint32_t command;
@@ -7,7 +8,7 @@ struct Data_Package {
 };
 
 struct Gate {
-    uint8_t ID;
+    uint8_t ID = GATE_SERIAL_NUMBER;
     uint8_t pairID;
     bool active;
     uint8_t startGateID;
@@ -58,24 +59,24 @@ struct Measurement {
   String judgeCardCode = "";
   uint8_t judgeID = 0;
 
-  uint32_t NRFInterruptTime = 0;
+  uint64_t NRFInterruptTime = 0;
   bool NRFInterruptFlag = false;
 
   uint8_t synchroCounter = 0;
   bool synchroSuccess = 0;
-  uint32_t synchroTime = 0;
-  int32_t timeDiffrence = 0;
+  uint64_t synchroTime = 0;
+  int64_t timeDiffrence = 0;
 
-  uint32_t startInterruptTime = 0;
-  uint32_t finishInterruptTime = 0;
+  uint64_t startInterruptTime = 0;
+  uint64_t finishInterruptTime = 0;
   bool startInterruptFlag = false;
   bool finishInterruptFlag = false;
 
-  int8_t counter_m = 0;
-  int8_t counter_s = 0;
-  int8_t counter_ms = 0;
+  uint32_t counter_m = 0;
+  uint32_t counter_s = 0;
+  uint32_t counter_ms = 0;
   String finalFormatedTime = "";
-  uint32_t finalTime = 0;
+  uint64_t finalTime = 0;
 
   bool getUserRecieved =  false;
   bool getRobotRecieved = false;
@@ -116,3 +117,4 @@ bool checkIR(uint32_t timeout);
 void resetMeasurement(Measurement &measurement);
 void checkConnection();
 void handleUserReset();
+void applyNewGateSettings();

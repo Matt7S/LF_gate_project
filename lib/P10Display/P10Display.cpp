@@ -396,7 +396,7 @@ void P10Display::setLineStatic(uint8_t line, String text, uint8_t position, bool
     }
 }
 
-void P10Display::setTimer(uint8_t line, bool update, uint32_t givenTimeUs, uint32_t refresh_time_ms) {
+void P10Display::setTimer(uint8_t line, bool update, uint64_t givenTimeUs, uint32_t refresh_time_ms) {
     update_timer = update;
     given_time_us = givenTimeUs;
     if (line == 0) {
@@ -526,10 +526,10 @@ void P10Display::updateDisplay() {
 }
 
 void P10Display::countTime() {
-    uint32_t given_time_ms = (given_time_us / 1000);  
+    uint64_t given_time_ms = ((given_time_us + 500) / 1000);  
   
     if (update_timer) {
-        uint32_t currentTime = millis();
+        uint64_t currentTime = (uint64_t)to_ms_since_boot(get_absolute_time());
         // Odcinamy 3 ostatnie zera (optymalnie)
         counter_m = ((currentTime - given_time_ms) / 60000) % 60;       // Minuty (każde 60 000 ms to 1 minuta)
         counter_s = ((currentTime - given_time_ms) / 1000) % 60;        // Sekundy (każde 1000 ms to 1 sekunda)
