@@ -5,6 +5,7 @@
 #include <Wire.h>
 
 // Register addresses
+#define TRIGGER_REG 0x0000 ///< Register address for triggering the QR scanner.
 #define READY_REG 0x0010 ///< Register address for checking if QR code is ready.
 #define LENGTH_REG 0x0020 ///< Register address for reading the length of the QR code data.
 #define DATA_REG 0x1000 ///< Register address for reading the QR code data.
@@ -77,7 +78,7 @@ public:
      * 
      * @param automatic If true, sets the scanner to automatic mode; otherwise, sets it to manual mode.
      */
-    void setMode(bool automatic);
+    void setMode(bool clearBuffer, bool startDecoding, bool useAutomaticMode);
 
     /**
      * @brief Reads QR code data from the scanner.

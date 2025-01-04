@@ -57,7 +57,6 @@ RFID rfid(RC_522_SDA, RC_522_RST);
 QRScanner qr(0x21, BARCODE_SCANNER_SDA, BARCODE_SCANNER_SCL, &Wire); // Adres I2C, SDA, SCL, Wire
 P10Display display(LCD_A, LCD_B, LCD_CLK, LCD_DATA, LCD_LATCH, LCD_OE);
 
-bool QRScanner_present = false;
 uint8_t display_speed1 = 20;
 uint8_t display_speed2 = 50;
 uint8_t display_speed3 = 75;
@@ -84,21 +83,16 @@ void setup() {
   pinMode(LED_RED, OUTPUT);
 
   pinMode(IR_IRQ_PIN, INPUT_PULLUP);
-  pinMode(BARCODE_SCANNER_PRESENT_PIN, INPUT_PULLUP);
   digitalWrite(LED_GREEN, HIGH);
   digitalWrite(LED_RED, LOW);
 
-  QRScanner_present = digitalRead(BARCODE_SCANNER_PRESENT_PIN) == HIGH;
-
 
   rfid.init();
+
   radio.begin();
 
-  if (QRScanner_present) {
-    qr.begin();
-    Serial.println("QR scanner is present");
-  }
-
+  qr.begin();
+  qr.setMode(true, true, false);
 
   
 
@@ -120,12 +114,11 @@ void setup() {
   radio.setPALevel(RF24_PA_HIGH);
   radio.setDataRate(RF24_2MBPS);
   radio.setChannel(100);
-  radio.setRetries(0, 0);
+  radio.setRetries(15, 15);
   radio.setAutoAck(true); // Wyłącz automatyczne potwierdzenia dla wszystkich rurek
   // Enable interrupt for NRF module
   radio.maskIRQ(true, true, false);
   attachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT), handleInterrupt, FALLING);
-  
 }
 
 
@@ -137,8 +130,6 @@ void setup() {
 
 
 void setup1(){
-  
-  
   
 }
 
@@ -243,7 +234,7 @@ void loop() {
       {
         currentState = QR_WAITING;
         Serial.println("QR_WAITING");
-        //qr.setMode(true);
+        qr.setMode(true, true, true);
       }
     } 
     else
@@ -252,7 +243,7 @@ void loop() {
       if (currMeasurement.synchroSuccess) {
         currentState = QR_WAITING;
         Serial.println("QR_WAITING");
-        //qr.setMode(true);
+        qr.setMode(true, true, true);
       }
 
     }
@@ -281,12 +272,13 @@ void loop() {
         
         currentState = QR_SCANNED;
         Serial.println("QR_SCANNED");
-        qr.setMode(false);
+        qr.setMode(true, false, false);
       }
       if (currMeasurement.getRobotRecieved) 
       {
         currentState = QR_SCANNED;
         Serial.println("QR_SCANNED");
+        qr.setMode(true, false, false);
       }
     }
     else {
@@ -572,7 +564,7 @@ void loop() {
     if (waitForNextState(5000)) 
     {
       Serial.println("RESETING22");
-      qr.setMode(false);
+      qr.setMode(true, false, false);
       resetMeasurement(currMeasurement);
 
       currentState = IDLE;
@@ -623,6 +615,7 @@ void handleInterrupt() {
   currMeasurement.NRFInterruptTime = to_us_since_boot(get_absolute_time());
   //Serial.print("NRF Interrupt: ");
   //Serial.println(currMeasurement.NRFInterruptTime);
+
 }
 
 
@@ -647,18 +640,13 @@ bool processQRCode(uint32_t scanEveryMs, String &qrCode) {
 
   if (millis() - repeat_qr > scanEveryMs) 
   {
-    if (QRScanner_present) 
+    qrCode = qr.readQRCode(false); // Pass 'true' to filter out corrupted data
+    if (qrCode.length() > 0) 
     {
-      qrCode = qr.readQRCode(false); // Pass 'true' to filter out corrupted data
-      if (qrCode.length() > 0) 
-      {
-        Serial.print("QR Code: ");
-        Serial.println(qrCode);
-        //qr.setMode(false);
-        return true;
-
-        
-      }
+      Serial.print("QR Code: ");
+      Serial.println(qrCode);
+      qr.setMode(true, false, false);
+      return true;
     }
     repeat_qr = millis();
   }
