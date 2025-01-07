@@ -9,9 +9,9 @@
 #include "wifi_config.hpp"
 #include "P10Display.hpp"
 #include "main.hpp"
+#include "pico/stdlib.h"
 
 
-#define BARCODE_SCANNER_PRESENT_PIN 0
 // Define pins for SPI
 #define SPI0_PIN_SCK 2
 #define SPI0_PIN_MOSI 3
@@ -83,8 +83,8 @@ void setup() {
   pinMode(LED_RED, OUTPUT);
 
   pinMode(IR_IRQ_PIN, INPUT_PULLUP);
-  digitalWrite(LED_GREEN, HIGH);
-  digitalWrite(LED_RED, LOW);
+  digitalWrite(LED_GREEN, HIGH);  //high - green led is off
+  digitalWrite(LED_RED, LOW);     //low - red led is on
 
 
   rfid.init();
@@ -107,6 +107,8 @@ void setup() {
       Serial.println("Waiting for serwer response...");
       delay(1000);
   }
+  digitalWrite(LED_RED, HIGH);  //low - green led is on
+
   display.setLineDynamic(0, "Connected to server", true, display_speed1, true);
   delay(1000);
 
@@ -121,13 +123,7 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT), handleInterrupt, FALLING);
 }
 
-
-
-
-
-
 //                                                                                                       SETUP 1
-
 
 void setup1(){
   
@@ -149,13 +145,13 @@ void loop() {
     Serial.println("IDLE");
     if (gate.requiredUserCard && gate.requiredUserQrCode) 
     {
-      currentState = RFID_WAITING;
+      currentState = USER_AUTHENTICATION;
       Serial.println("RFID_WAITING");
     } 
     else if (gate.requiredUserCard && !gate.requiredUserQrCode) 
     {
-      currentState = QR_WAITING;
-      Serial.println("QR_WAITING");
+      currentState = ROBOT_AUTHENTICATION;
+      Serial.println("ROBOT_AUTHENTICATION");
     }
     
     break;
@@ -164,7 +160,7 @@ void loop() {
     
 
   //                                       CASE RFID_WAITING
-  case RFID_WAITING:
+  case USER_AUTHENTICATION:
     // Handle RFID waiting state
     {
       checkIR(1000);
@@ -182,43 +178,29 @@ void loop() {
       }
       if (currMeasurement.getUserRecieved) 
       {
-        currentState = RFID_SCANNED;
-        Serial.println("RFID_SCANNED");
+        if (waitForNextState(200)) 
+        {
+          currentState = TIME_SYNCHRONIZATION;
+          Serial.println("TIME_SYNCHRONIZATION");
+          radio.flush_tx(); // Wyczyść bufor nadawczy
+          radio.flush_rx(); // Wyczyść bufor odbiorczy
+        }
       }
       if (newSettingsAvailiable) 
       {
         currentState = IDLE;
         Serial.println("IDLE");
-        break;
       }
-    }
-    break;
-    
-
-  //                                       CASE RFID_SCANNED
-  case RFID_SCANNED: // Handle RFID scanned state
-  {
-    if (currMeasurement.getUserRecieved) 
-    {
-      if (waitForNextState(200)) 
-      {
-        currentState = TIME_SYNCHRONIZATION;
-        Serial.println("TIME_SYNCHRONIZATION");
-        radio.flush_tx(); // Wyczyść bufor nadawczy
-        radio.flush_rx(); // Wyczyść bufor odbiorczy
-      }
-    }
     break;
   }
-  
-    
+
   
   //                                       CASE TIME_SYNCHRONIZATION
   case TIME_SYNCHRONIZATION:
   { 
     
     // Handle time synchronization state
-    if (gate.typeName == "START") {
+    if (gate.start) {
       if (currMeasurement.synchroCounter > 20)
       {
         display.setLineDynamic(0, "Error! Unable to synchronize time! Please try again!", true, display_speed1, true);
@@ -232,7 +214,7 @@ void loop() {
 
       if (synchronize_time_transmitter()) 
       {
-        currentState = QR_WAITING;
+        currentState = ROBOT_AUTHENTICATION;
         Serial.println("QR_WAITING");
         qr.setMode(true, true, true);
       }
@@ -241,7 +223,7 @@ void loop() {
     {
       listenForSignals();
       if (currMeasurement.synchroSuccess) {
-        currentState = QR_WAITING;
+        currentState = ROBOT_AUTHENTICATION;
         Serial.println("QR_WAITING");
         qr.setMode(true, true, true);
       }
@@ -252,14 +234,15 @@ void loop() {
     
 
   //                                       CASE QR_WAITING
-  case QR_WAITING: // Handle QR waiting state
+  case ROBOT_AUTHENTICATION: // Handle QR waiting state
   { 
     String screen_line1 = "Hello ";
     screen_line1 += currMeasurement.playerName;
     screen_line1 += " Please scan Robot QR code";
     display.setLineDynamic(0, screen_line1, true, display_speed1, true);
     display.setLineStatic(1, gate.typeName, 1, true);
-    if (gate.typeName == "START") 
+
+    if (!currMeasurement.getRobotRecieved) 
     {
       if (processQRCode(100, currMeasurement.robotQrCode)) 
       {
@@ -269,41 +252,20 @@ void loop() {
         data.set("category_id", gate.categoryID);
         data.set("stage_id", gate.stageID);
         sendJsonMessage("GET_ROBOT", data);
-        
-        currentState = QR_SCANNED;
-        Serial.println("QR_SCANNED");
-        qr.setMode(true, false, false);
-      }
-      if (currMeasurement.getRobotRecieved) 
-      {
-        currentState = QR_SCANNED;
         Serial.println("QR_SCANNED");
         qr.setMode(true, false, false);
       }
     }
-    else {
-      if (currMeasurement.getRobotRecieved) {
-        currentState = QR_SCANNED;
-        Serial.println("QR_SCANNED");
-      }
-    }
-  }
-    break;
-
-  //                                       CASE QR_SCANNED
-  case QR_SCANNED: // Handle QR scanned state
-  {
-    if (currMeasurement.getRobotRecieved) 
+    else 
     {
+      Serial.println("GET ROBOT RECIEVED");
+      qr.setMode(true, false, false);
       String screen_line1 = "Hello ";
       screen_line1 += currMeasurement.robotName;
       display.setLineDynamic(0, screen_line1, true, display_speed1, true);
       display.setLineStatic(1, gate.typeName, 1, true);
       if (waitForNextState(2000)) 
       {
-        currentState = START_WAITING;
-        Serial.println("START_WAITING");
-
         if (gate.start) 
         {
           attachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN), handleInterruptIR, FALLING);
@@ -323,14 +285,16 @@ void loop() {
           display.setLineDynamic(0, "Plan", true, display_speed1, true);
           display.setLineStatic(1, gate.typeName, 1, true);
         }
+        currentState = START_WAITING;
+        Serial.println("START_WAITING");
       }
     }
     break;
   }
     
-    
   //                                       CASE START_WAITING
   case START_WAITING: // Handle start waiting state
+    digitalWrite(LED_GREEN, LOW);  //high - green led is off
     if (gate.start) {
       if(currMeasurement.startInterruptFlag) 
       {
@@ -557,6 +521,7 @@ void loop() {
   case RESETING: // Handle reset state
   {
     //Serial.println("RESETING11");
+    digitalWrite(LED_GREEN, HIGH);  //high - green led is off
     display.setLineDynamic(0, currMeasurement.lastMessage, true, display_speed1, true);
     display.setLineStatic(1, gate.typeName, 1, true);
     display.stopBlinking(0);
@@ -620,7 +585,7 @@ void handleInterrupt() {
 
 
 void handleInterruptIR() {
-  if (gate.typeName == "START") {
+  if (gate.start) {
     currMeasurement.startInterruptTime = to_us_since_boot(get_absolute_time());
     currMeasurement.startInterruptFlag = 1;
     //Serial.println("START Interrupt");
@@ -1073,7 +1038,7 @@ uint32_t requestTimeWithRetries(uint8_t maxRetries, unsigned long waitDuration) 
 
 bool sendStartCommand() {
     Data_Package nrf_data;
-    nrf_data.command = 0x03; // Assuming 0x02 represents "START"
+    nrf_data.command = 0x03;
     nrf_data.time = (uint64_t)((int64_t)currMeasurement.startInterruptTime - currMeasurement.timeDiffrence);
     
     radio.stopListening();
@@ -1089,7 +1054,7 @@ bool sendStartCommand() {
 
 bool sendFinishCommand() {
     Data_Package nrf_data;
-    nrf_data.command = 0x04; // Assuming 0x03 represents "STOP"
+    nrf_data.command = 0x04;
 
     nrf_data.time = currMeasurement.finalTime;
 
@@ -1174,11 +1139,14 @@ void checkConnection() {
   }
 
   if (!client.connected()) {
+    digitalWrite(LED_RED, LOW);  //low - green led is on
     if (connectToServer()) {
     FirebaseJson data;
     data.set("serial_number", GATE_SERIAL_NUMBER);
     sendJsonMessage("GET_SETTINGS", data);
     }
+  } else {
+    digitalWrite(LED_RED, HIGH);  //high - green led is off
   }
 }
 
@@ -1239,11 +1207,13 @@ void applyNewGateSettings() {
   // Konfiguracja bramki w zależności od typu
   if (gate.typeName == "START") {
       gate.start = true;
+      gate.finish = false;
       radio.openWritingPipe(gate.nrfStartAddress); // Adres startowy już przypisany w handleServerResponse
       radio.openReadingPipe(1, gate.nrfFinishAddress); // Adres końcowy już przypisany w handleServerResponse
       radio.stopListening();
       Serial.println("Role set to TRANSMITTER");
   } else if (gate.typeName == "FINISH") {
+     gate.start = false;
       gate.finish = true;
       radio.openWritingPipe(gate.nrfFinishAddress); // Adres końcowy już przypisany w handleServerResponse
       radio.openReadingPipe(1, gate.nrfStartAddress); // Adres startowy już przypisany w handleServerResponse

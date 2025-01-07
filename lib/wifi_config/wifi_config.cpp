@@ -36,15 +36,15 @@ bool reconnectWiFi() {
 bool resolveServerIP() {
     for (int i = 0; i < 5; i++) {
         if (WiFi.hostByName(MY_SERVER_HOSTNAME, MY_SERVER_IP)) {
-            Serial.print("Resolved IP Address of ");
-            Serial.print(MY_SERVER_HOSTNAME);
-            Serial.print(": ");
-            Serial.println(MY_SERVER_IP);
-            return true;
-        } else {
-            Serial.println("Hostname resolution failed!");
-            delay(500); // Stop if resolution fails
-        }
+          Serial.print("Resolved IP Address of ");
+          Serial.print(MY_SERVER_HOSTNAME);
+          Serial.print(": ");
+          Serial.println(MY_SERVER_IP);
+          return true;
+      } else {
+          Serial.println("Hostname resolution failed!");
+          delay(500); // Stop if resolution fails
+      }
     }
     Serial.println("Hostname resolution failed 5 times!");
     return false;
