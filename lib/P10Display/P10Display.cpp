@@ -50,11 +50,11 @@ P10Display::P10Display(uint8_t a, uint8_t b, uint8_t clk, uint8_t data, uint8_t 
 void P10Display::refresh() {
   // wyłącz wyjście
   digitalWrite(pinOE, LOW);
-  // wybór wierszy
+  // wwybierz wierse
   digitalWrite(pinA, (refresh_row & 0b01));
   digitalWrite(pinB, ((refresh_row & 0b10) >> 1));
   uint8_t start_idx = 15 - refresh_row;
-  // przesłanie danych do wyświetlacza
+  // prześlij dane do wierszy
   for (uint8_t col_idx = 0; col_idx < 32; col_idx += 8) {
     for (uint8_t byte_idx = start_idx; byte_idx >= 0; byte_idx -= 4) {
       for (uint8_t i = col_idx; i < col_idx + 8; i++) {
@@ -66,14 +66,15 @@ void P10Display::refresh() {
       }
     }
   }
-  // zatrzask danych 
+  // zatrzaśnij dane
   digitalWrite(pinLATCH, HIGH);
   delayMicroseconds(50);
   digitalWrite(pinLATCH, LOW);
   // włącz wyjście
   digitalWrite(pinOE, HIGH);
+  // odczekaj między wierszami
   delayMicroseconds(1000);
-
+  // zmień wiersz
   refresh_row = (refresh_row + 1) % 4;
 }
 
