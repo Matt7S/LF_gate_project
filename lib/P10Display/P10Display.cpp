@@ -48,54 +48,33 @@ P10Display::P10Display(uint8_t a, uint8_t b, uint8_t clk, uint8_t data, uint8_t 
 
 
 void P10Display::refresh() {
-  digitalWrite(pinOE, LOW); // Włącz wyjście
-
-  uint8_t start_idx;
-  switch (refresh_row) {
-      case 0:
-          digitalWrite(pinA, HIGH);
-          digitalWrite(pinB, HIGH);
-          start_idx = 15;
-          break;
-      case 1:
-          digitalWrite(pinA, LOW);
-          digitalWrite(pinB, HIGH);
-          start_idx = 14;
-          break;
-      case 2:
-          digitalWrite(pinA, HIGH);
-          digitalWrite(pinB, LOW);
-          start_idx = 13;
-          break;
-      case 3:
-          digitalWrite(pinA, LOW);
-          digitalWrite(pinB, LOW);
-          start_idx = 12;
-          break;
-  }
-
-  for (int col_idx = 0; col_idx < 32; col_idx += 8) {
-    for (int byte_idx = start_idx; byte_idx >= 0; byte_idx -= 4) {
-      int end_idx = col_idx + 8;
-      for (int i = col_idx; i < end_idx; i++) {
+  // wyłącz wyjście
+  digitalWrite(pinOE, LOW);
+  // wybór wierszy
+  digitalWrite(pinA, (refresh_row & 0b01));
+  digitalWrite(pinB, ((refresh_row & 0b10) >> 1));
+  uint8_t start_idx = 15 - refresh_row;
+  // przesłanie danych do wyświetlacza
+  for (uint8_t col_idx = 0; col_idx < 32; col_idx += 8) {
+    for (uint8_t byte_idx = start_idx; byte_idx >= 0; byte_idx -= 4) {
+      for (uint8_t i = col_idx; i < col_idx + 8; i++) {
         bool transfer = !user_buffer[byte_idx][i];
         digitalWrite(pinDATA, transfer);
         digitalWrite(pinCLK, HIGH);
+        delayMicroseconds(50);
         digitalWrite(pinCLK, LOW);
       }
     }
   }
-
+  // zatrzask danych 
   digitalWrite(pinLATCH, HIGH);
+  delayMicroseconds(50);
   digitalWrite(pinLATCH, LOW);
+  // włącz wyjście
   digitalWrite(pinOE, HIGH);
   delayMicroseconds(1000);
 
-  // Aktualizacja wiersza
-  refresh_row++;
-  if (refresh_row == 4) {
-      refresh_row = 0;
-  }
+  refresh_row = (refresh_row + 1) % 4;
 }
 
 
@@ -137,57 +116,6 @@ void P10Display::default_timer(byte output[5][32]) {
 
 
 }
-
-
-/*
-void P10Display::default_timer_screen() {
-    static uint64_t last_refresh = 0;
-
-    if (millis() - last_refresh > refresh_time_ms) {
-        byte pixelArray[5][32] = {0};
-        default_timer(counter_m, counter_s, counter_ms, pixelArray);
-
-        // Clear the entire buffer
-        for (int i = 0; i < 16; i++) {
-            for (int j = 0; j < 32; j++) {
-                user_buffer[i][j] = 0;
-            }
-        }
-
-        if (line1Showtimer && line2Showtimer) {
-            // Copy to both top and bottom parts, centered vertically
-            for (int i = 0; i < 5; i++) {
-                for (int j = 0; j < 32; j++) {
-                    if (i < 4) {
-                        user_buffer[i + 2][j] = pixelArray[i][j]; // Center vertically for top part
-                        user_buffer[i + 10][j] = pixelArray[i][j]; // Center vertically for bottom part
-                    }
-                }
-            }
-        } else if (line1Showtimer) {
-            // Copy to top part, centered vertically
-            for (int i = 0; i < 5; i++) {
-                for (int j = 0; j < 32; j++) {
-                    if (i < 4) {
-                        user_buffer[i + 2][j] = pixelArray[i][j]; // Center vertically for top part
-                    }
-                }
-            }
-        } else if (line2Showtimer) {
-            // Copy to bottom part, centered vertically
-            for (int i = 0; i < 5; i++) {
-                for (int j = 0; j < 32; j++) {
-                    if (i < 4) {
-                        user_buffer[i + 10][j] = pixelArray[i][j]; // Center vertically for bottom part
-                    }
-                }
-            }
-        }
-
-        last_refresh = millis();
-    }
-}
-*/
 
 void P10Display::default_timer_screen() {
   static uint64_t last_refresh = 0;
