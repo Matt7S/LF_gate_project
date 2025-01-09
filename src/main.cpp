@@ -138,7 +138,6 @@ void loop() {
   handleServerResponse();
 
   switch (currentState) {
-  //                                       CASE IDLE
   case IDLE:  // Handle idle state
   {
     applyNewGateSettings();
@@ -148,12 +147,6 @@ void loop() {
       currentState = USER_AUTHENTICATION;
       Serial.println("RFID_WAITING");
     } 
-    else if (gate.requiredUserCard && !gate.requiredUserQrCode) 
-    {
-      currentState = ROBOT_AUTHENTICATION;
-      Serial.println("ROBOT_AUTHENTICATION");
-    }
-    
     break;
   }
 
@@ -194,43 +187,6 @@ void loop() {
     break;
   }
 
-  
-  //                                       CASE TIME_SYNCHRONIZATION
-  case TIME_SYNCHRONIZATION:
-  { 
-    
-    // Handle time synchronization state
-    if (gate.start) {
-      if (currMeasurement.synchroCounter > 20)
-      {
-        display.setLineDynamic(0, "Error! Unable to synchronize time! Please try again!", true, display_speed1, true);
-        if (waitForNextState(3000)) 
-          {
-            currentState = RESET_WAITING;
-            Serial.println("RESET_WAITING");
-          }
-      }
-      currMeasurement.synchroCounter++;
-
-      if (synchronize_time_transmitter()) 
-      {
-        currentState = ROBOT_AUTHENTICATION;
-        Serial.println("QR_WAITING");
-        qr.setMode(true, true, true);
-      }
-    } 
-    else
-    {
-      listenForSignals();
-      if (currMeasurement.synchroSuccess) {
-        currentState = ROBOT_AUTHENTICATION;
-        Serial.println("QR_WAITING");
-        qr.setMode(true, true, true);
-      }
-
-    }
-    break;
-  }
     
 
   //                                       CASE QR_WAITING
@@ -268,7 +224,7 @@ void loop() {
       {
         if (gate.start) 
         {
-          attachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN), handleInterruptIR, FALLING);
+          attachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN), handleInterruptIR, RISING);
           Serial.println("enable interrupt start");
           String screen_line1 = "Place robot ";
           screen_line1 += currMeasurement.robotName;
@@ -285,111 +241,112 @@ void loop() {
           display.setLineDynamic(0, "Plan", true, display_speed1, true);
           display.setLineStatic(1, gate.typeName, 1, true);
         }
-        currentState = START_WAITING;
+        currentState = TIME_SYNCHRONIZATION;
         Serial.println("START_WAITING");
       }
     }
     break;
   }
+
+  //                                       CASE TIME_SYNCHRONIZATION
+  case TIME_SYNCHRONIZATION:
+  { 
+    
+    // Handle time synchronization state
+    if (gate.start) {
+      if (currMeasurement.synchroCounter > 20)
+      {
+        display.setLineDynamic(0, "Error! Unable to synchronize time! Please try again!", true, display_speed1, true);
+        if (waitForNextState(3000)) 
+          {
+            currentState = RESET_WAITING;
+            Serial.println("RESET_WAITING");
+          }
+      }
+      currMeasurement.synchroCounter++;
+
+      if (synchronize_time_transmitter()) 
+      {
+        currentState = START;
+        Serial.println("QR_WAITING");
+        qr.setMode(true, true, true);
+      }
+    } 
+    else
+    {
+      listenForSignals();
+      if (currMeasurement.synchroSuccess) {
+        currentState = START;
+        Serial.println("QR_WAITING");
+        qr.setMode(true, true, true);
+      }
+
+    }
+    break;
+  }
     
   //                                       CASE START_WAITING
-  case START_WAITING: // Handle start waiting state
-    digitalWrite(LED_GREEN, LOW);  //high - green led is off
-    if (gate.start) {
-      if(currMeasurement.startInterruptFlag) 
-      {
-        currentState = STARTED;
-        Serial.println("STARTED");
-        display.stopBlinking(0);
-        display.clearTopPart();
-        display.setTimer(0, 1, currMeasurement.startInterruptTime, 66);
-        display.setLineDynamic(1, "Run in progress!", true, display_speed1, true);
-        display.stopBlinking(1);
-      }
-    } else {
-      listenForSignals();
-      if (currMeasurement.startInterruptFlag)
-      {
-        attachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN), handleInterruptIR, FALLING);
-        currentState = STARTED;
-        Serial.println("STARTED");
-        radio.stopListening();
-        display.clearTopPart();
-        display.setTimer(0, 1, currMeasurement.startInterruptTime, 66);
-        display.setLineDynamic(1, "Run in progress!", true, display_speed1, true);
-      }
-    }
+  case START: // Handle combined state for START_WAITING and STARTED
+  {
+      digitalWrite(LED_GREEN, LOW); // Green LED off
 
+      if (gate.start) {
+          if (currMeasurement.startInterruptFlag) {
+              // Logic when startInterruptFlag is true
+              currentState = START;
+              Serial.println("STARTED");
+              display.stopBlinking(0);
+              display.clearTopPart();
+              display.setTimer(0, 1, currMeasurement.startInterruptTime, 66);
+              display.setLineDynamic(1, "Run in progress!", true, display_speed1, true);
+              display.stopBlinking(1);
+
+              if (sendStartCommand()) {
+                  currentState = FINISH;
+                  Serial.println("FINISH_WAITING");
+                  radio.startListening();
+              }
+          }
+      } else {
+          listenForSignals();
+          if (currMeasurement.startInterruptFlag) {
+              attachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN), handleInterruptIR, RISING);
+              currentState = START;
+              Serial.println("STARTED");
+              radio.stopListening();
+              display.clearTopPart();
+              display.setTimer(0, 1, currMeasurement.startInterruptTime, 66);
+              display.setLineDynamic(1, "Run in progress!", true, display_speed1, true);
+
+              currentState = FINISH;
+              Serial.println("FINISH_WAITING");
+          }
+      }
       break;
+  }
 
-  //                                       CASE STARTED    
-  case STARTED: // Handle started state
+  case FINISH: // Handle combined state for FINISH_WAITING and FINISHED
   {
-    if (gate.start) 
-    {
-      if (sendStartCommand()) 
-      {
-        currentState = FINISH_WAITING;
-        Serial.println("FINISH_WAITING");
-        radio.startListening();
+      if (gate.start) {
+          if (currMeasurement.finishInterruptFlag) {
+              // Logic for finish interrupt
+              display.setTimer(0, 0, currMeasurement.finalTime, 66);
+              currentState = COUNT_RESULT;
+              Serial.println("CONFIRMATION_WAITING");
+          }
+      } else {
+          if (currMeasurement.finishInterruptFlag) {
+              currMeasurement.finalTime = currMeasurement.finishInterruptTime - currMeasurement.startInterruptTime;
+              Serial.println(currMeasurement.finalTime);
+              display.setTimer(0, 0, currMeasurement.finalTime, 66);
+              currentState = COUNT_RESULT;
+              Serial.println("CONFIRMATION_WAITING");
+          } else if (sendFinishCommand()) {
+              currentState = COUNT_RESULT;
+              Serial.println("CONFIRMATION_WAITING");
+          }
       }
-    }
-    else 
-    {
-      // POKAZANIE NA EKRANIE CZASU I PRZEJŚCIE DALEJ
-      currentState = FINISH_WAITING;
-      Serial.println("FINISH_WAITING");
-    }
-    break;
-  }
-    
-    
-  //                                       CASE FINISH_WAITING
-  case FINISH_WAITING: // Handle finish waiting state
-  {
-    if (gate.start) 
-    {
-      listenForSignals();
-      if (currMeasurement.finishInterruptFlag) 
-      {
-        display.setTimer(0, 0, currMeasurement.finalTime, 66);
-        currentState = FINISHED;
-        Serial.println("FINISHED");
-        
-      }
-    } 
-    else 
-    {
-      if (currMeasurement.finishInterruptFlag) 
-      {
-        currMeasurement.finalTime = currMeasurement.finishInterruptTime - currMeasurement.startInterruptTime;
-        Serial.println(currMeasurement.finalTime);
-        display.setTimer(0, 0, currMeasurement.finalTime, 66);
-        currentState = FINISHED;
-        Serial.println("FINISHED"); 
-      }
-    }
-    break;
-  }
-    
-  //                                       CASE FINISHED
-  case FINISHED: // Handle finished state
-  {
-    if (gate.start) 
-    {
-      // only show time
-      currentState = COUNT_RESULT;
-      Serial.println("CONFIRMATION_WAITING");
-    } 
-    else 
-    {
-      if (sendFinishCommand()) 
-      {
-        currentState = COUNT_RESULT;
-        Serial.println("CONFIRMATION_WAITING");
-      }
-    }
-    break;
+      break;
   }
   case COUNT_RESULT:
   {
@@ -409,12 +366,12 @@ void loop() {
     currMeasurement.finalFormatedTime = String(buffer);
     Serial.println(currMeasurement.finalFormatedTime);
 
-    currentState = CONFIRMATION_WAITING;
+    currentState = JUDGE_CONFIRMATION;
     Serial.println("CONFIRMATION_WAITING");
     break;
   }
 
-  case CONFIRMATION_WAITING:
+  case JUDGE_CONFIRMATION: 
   {
     if (gate.requiredConfirmation) 
     {
@@ -697,7 +654,6 @@ bool handleServerResponse() {
   while (client.available()) {
     FirebaseJson responseJson;
     FirebaseJsonData jsonData;
-    bool synchroSuccess = false;
 
     // Odczytaj odpowiedź jako linię
     String response = client.readStringUntil('\n');
@@ -831,9 +787,9 @@ void listenForSignals() {
     radio.read(&nrf_data, sizeof(Data_Package));
 
     switch (nrf_data.command) {
-        case 0x01: // Assuming 0x01 represents "TS"
+        case 0x01: // Time synchronization command
             if (currMeasurement.NRFInterruptTime == 0) {
-                Serial.println("No time received by interrupt??");
+                Serial.println("No time received by interrupt");
                 break;
             }
             Serial.println("Time synchronization command received");
@@ -841,7 +797,7 @@ void listenForSignals() {
             currMeasurement.synchroSuccess = synchronize_time_receiver(currMeasurement.NRFInterruptTime);
             break;  
 
-        case 0x02: // Assuming 0x02 represents"
+        case 0x02: // Send synchro time
             Serial.println("Resend synchro time command received");
             sendTime(currMeasurement.synchroTime);
             break;  
