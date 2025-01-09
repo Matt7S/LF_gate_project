@@ -17,7 +17,7 @@
 #define SPI0_PIN_MOSI 3
 #define SPI0_PIN_MISO 4
 // Define pins for RFID
-#define RC_522_SDA 5
+#define RC_522_SS 5   //SDA
 #define RC_522_RST 6
 // Define pins for NRF24L01
 #define NRF_INTERRUPT 7
@@ -53,7 +53,7 @@ Measurement currMeasurement;
 State currentState = IDLE;
 extern WiFiClient client; 
 RF24 radio(NRF_CE, NRF_CSN);
-RFID rfid(RC_522_SDA, RC_522_RST);  
+RFID rfid(RC_522_SS, RC_522_RST);  
 QRScanner qr(0x21, BARCODE_SCANNER_SDA, BARCODE_SCANNER_SCL, &Wire); // Adres I2C, SDA, SCL, Wire
 P10Display display(LCD_A, LCD_B, LCD_CLK, LCD_DATA, LCD_LATCH, LCD_OE);
 
@@ -637,7 +637,7 @@ bool processRFIDCard(uint32_t scanEveryMs, String &cardNumber) {
 }
 
 String readDataFromRFIDCard() {
-  digitalWrite(RC_522_SDA, LOW);
+  digitalWrite(RC_522_SS, LOW);
   rfid.antennaOn();
 
   static unsigned char status;
@@ -667,7 +667,7 @@ String readDataFromRFIDCard() {
 
   rfid.halt(); // Command the card to enter sleep mode
   rfid.antennaOff();
-  digitalWrite(RC_522_SDA, HIGH);
+  digitalWrite(RC_522_SS, HIGH);
   return cardNumber; // Return the card number as a String
 }
 

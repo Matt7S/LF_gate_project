@@ -51,8 +51,8 @@ void P10Display::refresh() {
   // wyłącz wyjście
   digitalWrite(pinOE, LOW);
   // wwybierz wierse
-  digitalWrite(pinA, (refresh_row & 0b01));
-  digitalWrite(pinB, ((refresh_row & 0b10) >> 1));
+  digitalWrite(pinA, !(refresh_row & 0b01));
+  digitalWrite(pinB, !((refresh_row & 0b10) >> 1));
   uint8_t start_idx = 15 - refresh_row;
   // prześlij dane do wierszy
   for (uint8_t col_idx = 0; col_idx < 32; col_idx += 8) {
