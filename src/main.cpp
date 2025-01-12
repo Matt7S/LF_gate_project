@@ -251,8 +251,6 @@ void loop() {
   //                                       CASE TIME_SYNCHRONIZATION
   case TIME_SYNCHRONIZATION:
   { 
-    
-    // Handle time synchronization state
     if (gate.start) {
       if (currMeasurement.synchroCounter > 20)
       {
