@@ -1,3 +1,12 @@
+/**
+ * @file main.cpp
+ * @brief Main entry point for LF Gate Timing System.
+ * 
+ * Implements the state machine for managing competition runs,
+ * including wireless synchronization, authentication, timing,
+ * and communication with central server.
+ */
+
 #include <Arduino.h>
 #include <SPI.h>
 #include <Freenove_RFID_Lib_for_Pico.h>
@@ -6,131 +15,121 @@
 #include <nRF24L01.h>
 #include <Wire.h>
 #include <QRScanner.hpp>
+#include "constants.hpp"
 #include "wifi_config.hpp"
 #include "P10Display.hpp"
 #include "main.hpp"
 
+// ========== Global Variables ==========
+Gate gate;                                  ///< Current gate configuration
+Gate newGateSettings;                       ///< New settings from server pending application
+bool newSettingsAvailable = false;          ///< Flag indicating new settings ready to apply
 
-// Define pins for SPI
-#define SPI0_PIN_SCK 2
-#define SPI0_PIN_MOSI 3
-#define SPI0_PIN_MISO 4
-// Define pins for RFID
-#define RC_522_SS 5   //SDA
-#define RC_522_RST 6
-// Define pins for NRF24L01
-#define NRF_INTERRUPT 7
-#define NRF_CE 10 //yellow
-#define NRF_CSN 11 // orange
-// Define pins for barcode scanner
-#define BARCODE_SCANNER_SDA 8  // reciever on the scanner
-#define BARCODE_SCANNER_SCL 9  // transmiter on the scanner
-// Define pins for LEDs
-#define LED_RED 12
-#define LED_GREEN 13
-// Define pins for buttons and LEDs
-#define BUTTON_ACCEPT_PIN 26
-#define BUTTON_CANCEL_PIN 14
-#define BUTTON_FORFEIT_PIN 15
-// Define pins for LCD P10
-#define LCD_OE 16      // Output Enable
-#define LCD_A 17       // Row address A
-#define LCD_B 18       // Row address B
-#define LCD_CLK 19    // Clock for shifting data
-#define LCD_LATCH 20  // Latch to display data
-#define LCD_DATA 21   // Serial data input
-// Define pin for IR sensor
-#define IR_IRQ_PIN 22
-// Define BUTTON DEBOUNCE TIME
-#define BUTTON_SKIP_TIME 500
+Measurement currMeasurement;                ///< Current run measurement data
+State currentState = IDLE;                  ///< Current state machine state
 
-Gate gate;
-Gate newGateSettings;
-bool newSettingsAvailiable = false;
+extern WiFiClient client;                   ///< WiFi client for server communication
 
-Measurement currMeasurement;
-State currentState = IDLE;
-extern WiFiClient client; 
-RF24 radio(NRF_CE, NRF_CSN);
-RFID rfid(RC_522_SS, RC_522_RST);  
-QRScanner qr(0x21, BARCODE_SCANNER_SDA, BARCODE_SCANNER_SCL, &Wire); // Adres I2C, SDA, SCL, Wire
-P10Display display(LCD_A, LCD_B, LCD_CLK, LCD_DATA, LCD_LATCH, LCD_OE);
+// ========== Hardware Instances ==========
+RF24 radio(NRF_CE, NRF_CSN);                ///< NRF24L01 radio module
+RFID rfid(RC522_SS, RC522_RST);             ///< RC522 RFID reader
+QRScanner qr(QR_SCANNER_I2C_ADDRESS, BARCODE_SCANNER_SDA, BARCODE_SCANNER_SCL, &Wire);  ///< QR code scanner
+P10Display display(LCD_A, LCD_B, LCD_CLK, LCD_DATA, LCD_LATCH, LCD_OE);  ///< LED matrix display
 
-uint8_t display_speed1 = 20;
-uint8_t display_speed2 = 50;
-uint8_t display_speed3 = 75;
 
+// ========== Setup and Loop ==========
 
 void setup() {
-  display.setLineDynamic(0, "Connecting to server...", true, display_speed1, true);
-  display.setLineDynamic(1, "Please wait", true, display_speed2, true);
-  delay(1000);
+    // Initialize display with startup messages
+    display.setLineDynamic(0, "Connecting to server...", true, DISPLAY_SPEED_FAST, true);
+    display.setLineDynamic(1, "Please wait", true, DISPLAY_SPEED_MEDIUM, true);
+    delay(1000);
 
-  Serial.begin(115200);
-  SPI.setSCK(SPI0_PIN_SCK);
-  SPI.setTX(SPI0_PIN_MOSI);
-  SPI.setRX(SPI0_PIN_MISO);
-  SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
-  SPI.begin();
+    // Initialize Serial communication
+    Serial.begin(SERIAL_BAUD_RATE);
+    
+    // Configure SPI bus
+    SPI.setSCK(SPI0_PIN_SCK);
+    SPI.setTX(SPI0_PIN_MOSI);
+    SPI.setRX(SPI0_PIN_MISO);
+    SPI.beginTransaction(SPISettings(SPI_CLOCK_SPEED, MSBFIRST, SPI_MODE0));
+    SPI.begin();
 
-  pinMode(BUTTON_ACCEPT_PIN, INPUT_PULLUP);
-  pinMode(BUTTON_CANCEL_PIN, INPUT_PULLUP); 
-  pinMode(BUTTON_FORFEIT_PIN, INPUT_PULLUP);
-  pinMode(NRF_INTERRUPT, INPUT_PULLUP);
-  
-  pinMode(LED_GREEN, OUTPUT);
-  pinMode(LED_RED, OUTPUT);
+    // Configure button inputs with pull-up resistors
+    pinMode(BUTTON_ACCEPT_PIN, INPUT_PULLUP);
+    pinMode(BUTTON_CANCEL_PIN, INPUT_PULLUP); 
+    pinMode(BUTTON_FORFEIT_PIN, INPUT_PULLUP);
+    pinMode(NRF_INTERRUPT, INPUT_PULLUP);
+    
+    // Configure LED outputs
+    pinMode(LED_GREEN, OUTPUT);
+    pinMode(LED_RED, OUTPUT);
 
-  pinMode(IR_IRQ_PIN, INPUT_PULLUP);
-  digitalWrite(LED_GREEN, HIGH);  //high - green led is off
-  digitalWrite(LED_RED, LOW);     //low - red led is on
+    // Configure IR sensor input
+    pinMode(IR_IRQ_PIN, INPUT_PULLUP);
+    
+    // Initialize LED states: GREEN off (HIGH), RED on (LOW)
+    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_RED, LOW);
 
+    // Initialize hardware modules
+    rfid.init();
+    radio.begin();
+    qr.begin();
+    qr.setMode(true, true, false);
 
-  rfid.init();
+    // Connect to WiFi and server
+    connectToWiFi();
+    resolveServerIP();
+    connectToServer();
+    
+    // Request initial gate settings from server
+    FirebaseJson data;
+    data.set("serial_number", GATE_SERIAL_NUMBER);
+    sendJsonMessage("GET_SETTINGS", data);
+    
+    // Wait for server response
+    while (!client.available()) {
+        Serial.println("Waiting for server response...");
+        delay(1000);
+    }
+    
+    // Indicate successful connection
+    digitalWrite(LED_RED, HIGH);
+    display.setLineDynamic(0, "Connected to server", true, DISPLAY_SPEED_FAST, true);
+    delay(1000);
 
-  radio.begin();
-
-  qr.begin();
-  qr.setMode(true, true, false);
-
-  
-
-  connectToWiFi();
-  resolveServerIP();
-  connectToServer();
-  FirebaseJson data;
-  data.set("serial_number", GATE_SERIAL_NUMBER);
-  sendJsonMessage("GET_SETTINGS", data);
-  
-  while (!client.available()) {
-      Serial.println("Waiting for serwer response...");
-      delay(1000);
-  }
-  digitalWrite(LED_RED, HIGH);  //low - green led is on
-
-  display.setLineDynamic(0, "Connected to server", true, display_speed1, true);
-  delay(1000);
-
-  // Ustawienia radia
-  radio.setPALevel(RF24_PA_HIGH);
-  radio.setDataRate(RF24_2MBPS);
-  radio.setChannel(100);
-  radio.setRetries(15, 15);
-  radio.setAutoAck(true); // Wyłącz automatyczne potwierdzenia dla wszystkich rurek
-  // Enable interrupt for NRF module
-  radio.maskIRQ(true, true, false);
-  attachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT), handleInterrupt, FALLING);
+    // Configure NRF24L01 radio module
+    radio.setPALevel(RF24_POWER_LEVEL);
+    radio.setDataRate(RF24_DATA_RATE);
+    radio.setChannel(RF24_CHANNEL);
+    radio.setRetries(RF24_RETRY_DELAY, RF24_RETRY_COUNT);
+    radio.setAutoAck(true);
+    radio.maskIRQ(true, true, false);
+    
+    // Attach interrupt for NRF24L01
+    attachInterrupt(digitalPinToInterrupt(NRF_INTERRUPT), handleInterrupt, FALLING);
 }
 
-//                                                                                                       SETUP 1
-
-void setup1(){
-  
+/**
+ * @brief Core loop for second processor (dual-core RP2040).
+ * Dedicated to display updates and rendering.
+ */
+void setup1() {
+    // Empty setup for second core
 }
 
+/**
+ * @brief Core 1 loop - handles display rendering.
+ */
+void loop1() {
+    display.updateDisplay();
+}
 
-//                                                                                                       LOOP 0
-
+/**
+ * @brief Core 0 loop - main state machine.
+ * Handles competition timing, user input, and server communication.
+ */
 void loop() {
   handleUserReset();
   checkConnection();
@@ -161,7 +160,7 @@ void loop() {
       checkIR(1000);
       String screen_line1 = gate.categoryName;
       screen_line1 += " Please scan your card";
-      display.setLineDynamic(0, screen_line1, true, display_speed1, true);
+      display.setLineDynamic(0, screen_line1, true, DISPLAY_SPEED_FAST, true);
       display.setLineStatic(1, gate.typeName, 1, true);
 
       if (processRFIDCard(500, currMeasurement.playerCardCode)) 
@@ -171,7 +170,7 @@ void loop() {
         message.set("category_id", gate.categoryID);
         sendJsonMessage("GET_USER", message);
       }
-      if (currMeasurement.getUserRecieved) 
+      if (currMeasurement.getUserReceived) 
       {
         if (waitForNextState(200)) 
         {
@@ -181,7 +180,7 @@ void loop() {
           radio.flush_rx(); // Wyczyść bufor odbiorczy
         }
       }
-      if (newSettingsAvailiable) 
+      if (newSettingsAvailable) 
       {
         currentState = IDLE;
         Serial.println("IDLE");
@@ -197,10 +196,10 @@ void loop() {
     String screen_line1 = "Hello ";
     screen_line1 += currMeasurement.playerName;
     screen_line1 += " Please scan Robot QR code";
-    display.setLineDynamic(0, screen_line1, true, display_speed1, true);
+    display.setLineDynamic(0, screen_line1, true, DISPLAY_SPEED_FAST, true);
     display.setLineStatic(1, gate.typeName, 1, true);
 
-    if (!currMeasurement.getRobotRecieved) 
+    if (!currMeasurement.getRobotReceived) 
     {
       if (processQRCode(100, currMeasurement.robotQrCode)) 
       {
@@ -220,18 +219,18 @@ void loop() {
       qr.setMode(true, false, false);
       String screen_line1 = "Hello ";
       screen_line1 += currMeasurement.robotName;
-      display.setLineDynamic(0, screen_line1, true, display_speed1, true);
+      display.setLineDynamic(0, screen_line1, true, DISPLAY_SPEED_FAST, true);
       display.setLineStatic(1, gate.typeName, 1, true);
       if (waitForNextState(2000)) 
       {
-        if (gate.start) 
+        if (gate.isStart) 
         {
           attachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN), handleInterruptIR, RISING);
           Serial.println("enable interrupt start");
           String screen_line1 = "Place robot ";
           screen_line1 += currMeasurement.robotName;
           screen_line1 += " on the start gate and good luck!";
-          display.setLineDynamic(0, screen_line1, true, display_speed1, true);
+          display.setLineDynamic(0, screen_line1, true, DISPLAY_SPEED_FAST, true);
           display.setLineStatic(1, gate.typeName, 1, true);
           display.startBlinking(1, 250);
         }
@@ -240,7 +239,7 @@ void loop() {
           String screen_line1 = "Place robot ";
           screen_line1 += currMeasurement.robotName;
           screen_line1 += " on the start gate and good luck!";
-          display.setLineDynamic(0, "Plan", true, display_speed1, true);
+          display.setLineDynamic(0, "Plan", true, DISPLAY_SPEED_FAST, true);
           display.setLineStatic(1, gate.typeName, 1, true);
         }
         currentState = TIME_SYNCHRONIZATION;
@@ -253,19 +252,19 @@ void loop() {
   //                                       CASE TIME_SYNCHRONIZATION
   case TIME_SYNCHRONIZATION:
   { 
-    if (gate.start) {
-      if (currMeasurement.synchroCounter > 20)
+    if (gate.isStart) {
+      if (currMeasurement.syncCounter > 20)
       {
-        display.setLineDynamic(0, "Error! Unable to synchronize time! Please try again!", true, display_speed1, true);
+        display.setLineDynamic(0, "Error! Unable to synchronize time! Please try again!", true, DISPLAY_SPEED_FAST, true);
         if (waitForNextState(3000)) 
           {
             currentState = RESET_WAITING;
             Serial.println("RESET_WAITING");
           }
       }
-      currMeasurement.synchroCounter++;
+      currMeasurement.syncCounter++;
 
-      if (synchronize_time_transmitter()) 
+      if (synchronizeTimeTransmitter()) 
       {
         currentState = START;
         Serial.println("QR_WAITING");
@@ -276,7 +275,7 @@ void loop() {
     else
     {
       listenForSignals();
-      if (currMeasurement.synchroSuccess) {
+      if (currMeasurement.syncSuccess) {
         currentState = START;
         Serial.println("QR_WAITING");
         qr.setMode(true, true, true);
@@ -291,7 +290,7 @@ void loop() {
   {
       digitalWrite(LED_GREEN, LOW); // Green LED off
 
-      if (gate.start) {
+      if (gate.isStart) {
           if (currMeasurement.startInterruptFlag) {
               // Logic when startInterruptFlag is true
               currentState = START;
@@ -299,7 +298,7 @@ void loop() {
               display.stopBlinking(0);
               display.clearTopPart();
               display.setTimer(0, 1, currMeasurement.startInterruptTime, 66);
-              display.setLineDynamic(1, "Run in progress!", true, display_speed1, true);
+              display.setLineDynamic(1, "Run in progress!", true, DISPLAY_SPEED_FAST, true);
               display.stopBlinking(1);
 
               if (sendStartCommand()) {
@@ -317,7 +316,7 @@ void loop() {
               radio.stopListening();
               display.clearTopPart();
               display.setTimer(0, 1, currMeasurement.startInterruptTime, 66);
-              display.setLineDynamic(1, "Run in progress!", true, display_speed1, true);
+              display.setLineDynamic(1, "Run in progress!", true, DISPLAY_SPEED_FAST, true);
 
               currentState = FINISH;
               Serial.println("FINISH_WAITING");
@@ -328,8 +327,8 @@ void loop() {
 
   case FINISH: // Handle combined state for FINISH_WAITING and FINISHED
   {
-      if (gate.start) {
-          if (currMeasurement.finishInterruptFlag) {
+      if (gate.isStart) {
+           if (currMeasurement.finishInterruptFlag) {
               // Logic for finish interrupt
               display.setTimer(0, 0, currMeasurement.finalTime, 66);
               currentState = COUNT_RESULT;
@@ -354,18 +353,18 @@ void loop() {
     Serial.println(currMeasurement.finalTime);
     uint64_t timing = ((currMeasurement.finalTime + 500) / 1000); // Zaokrąglamy w góręi odcinamy końcowe 3 miejsca po przecinku
     Serial.println(timing); 
-    currMeasurement.counter_m = (uint32_t)(((timing) / 60000)) % 60;       // Minuty (każde 60 000 ms to 1 minuta)
-    currMeasurement.counter_s = (uint32_t)(((timing) / 1000) % 60);        // Sekundy (każde 1000 ms to 1 sekunda)
-    currMeasurement.counter_ms = (uint32_t)((timing) % 1000);   
+    currMeasurement.counterMinutes = (uint32_t)(((timing) / 60000)) % 60;       // Minuty (każde 60 000 ms to 1 minuta)
+    currMeasurement.counterSeconds = (uint32_t)(((timing) / 1000) % 60);        // Sekundy (każde 1000 ms to 1 sekunda)
+    currMeasurement.counterMilliseconds = (uint32_t)((timing) % 1000);   
 
     char buffer[12]; // Tablica na wynik (maksymalnie 11 znaków + null terminator)
-    Serial.println(currMeasurement.counter_m);
-    Serial.println(currMeasurement.counter_s);
-    Serial.println(currMeasurement.counter_ms);
+    Serial.println(currMeasurement.counterMinutes);
+    Serial.println(currMeasurement.counterSeconds);
+    Serial.println(currMeasurement.counterMilliseconds);
 
-    sprintf(buffer, "%02d:%02d:%03d", currMeasurement.counter_m, currMeasurement.counter_s, currMeasurement.counter_ms);
-    currMeasurement.finalFormatedTime = String(buffer);
-    Serial.println(currMeasurement.finalFormatedTime);
+    sprintf(buffer, "%02d:%02d:%03d", currMeasurement.counterMinutes, currMeasurement.counterSeconds, currMeasurement.counterMilliseconds);
+    currMeasurement.finalFormattedTime = String(buffer);
+    Serial.println(currMeasurement.finalFormattedTime);
 
     currentState = JUDGE_CONFIRMATION;
     Serial.println("CONFIRMATION_WAITING");
@@ -376,12 +375,12 @@ void loop() {
   {
     if (gate.requiredConfirmation) 
     {
-      if (!currMeasurement.retryJudgeRecieved) 
+      if (!currMeasurement.retryJudgeReceived) 
       {
-        display.setLineDynamic(1, "Judge! Please scan your card to confirm!", true, display_speed1, true);
+        display.setLineDynamic(1, "Judge! Please scan your card to confirm!", true, DISPLAY_SPEED_FAST, true);
       }
       else {
-        display.setLineDynamic(1, currMeasurement.lastMessage, true, display_speed1, true);
+        display.setLineDynamic(1, currMeasurement.lastMessage, true, DISPLAY_SPEED_FAST, true);
       }
 
       if (processRFIDCard(100, currMeasurement.judgeCardCode)) 
@@ -390,7 +389,7 @@ void loop() {
         message.set("judge_card_code", currMeasurement.judgeCardCode);
         sendJsonMessage("GET_JUDGE", message);
       }
-      if (currMeasurement.getJudgeRecieved) 
+      if (currMeasurement.getJudgeReceived) 
       {
         currentState = CONFIRMATION;
         Serial.println("CONFIRMATION");
@@ -409,23 +408,23 @@ void loop() {
     //Serial.println("CONFIRMATION hereeeeee");
     uint32_t currentTime = millis();
     static uint32_t lastClickTime;
-    if (!currMeasurement.retryScoreRecieved) 
+    if (!currMeasurement.retryScoreReceived) 
     {
-      display.setLineDynamic(1, "Please accept, foreit or cancell!", true, display_speed1, true);
+      display.setLineDynamic(1, "Please accept, foreit or cancell!", true, DISPLAY_SPEED_FAST, true);
     } 
     else 
     {
-      display.setLineDynamic(1, currMeasurement.lastMessage, true, display_speed1, true);
+      display.setLineDynamic(1, currMeasurement.lastMessage, true, DISPLAY_SPEED_FAST, true);
     }
 
-    if (currentTime - lastClickTime > BUTTON_SKIP_TIME) 
+      if (millis() - static_cast<uint32_t>(lastClickTime) > BUTTON_SKIP_TIME) 
     {
       if (digitalRead(BUTTON_ACCEPT_PIN) == LOW) 
       {
         lastClickTime = currentTime;
         FirebaseJson data;
         data.set("robot_id", currMeasurement.robotID);
-        data.set("result_time", currMeasurement.finalFormatedTime);
+        data.set("result_time", currMeasurement.finalFormattedTime);
         data.set("category_id", gate.categoryID);
         data.set("stage_id", gate.stageID);
         data.set("gate_id", GATE_SERIAL_NUMBER);
@@ -445,10 +444,10 @@ void loop() {
         lastClickTime = currentTime;
         FirebaseJson data;
         data.set("robot_id", currMeasurement.robotID);
-        data.set("result_time", currMeasurement.finalFormatedTime);
+        data.set("result_time", currMeasurement.finalFormattedTime);
         data.set("category_id", gate.categoryID);
         data.set("stage_id", gate.stageID);
-        data.set("gate_id", gate.ID);
+        data.set("gate_id", gate.id);
         data.set("judge_id", currMeasurement.judgeID);
         data.set("player_id", currMeasurement.playerID);
         data.set("disqualified", true);
@@ -480,7 +479,7 @@ void loop() {
   {
     //Serial.println("RESETING11");
     digitalWrite(LED_GREEN, HIGH);  //high - green led is off
-    display.setLineDynamic(0, currMeasurement.lastMessage, true, display_speed1, true);
+    display.setLineDynamic(0, currMeasurement.lastMessage, true, DISPLAY_SPEED_FAST, true);
     display.setLineStatic(1, gate.typeName, 1, true);
     display.stopBlinking(0);
     display.stopBlinking(1);
@@ -528,38 +527,60 @@ bool waitForNextState(unsigned long interval) {
 
 //                                                                                                       LOOP 1
 
-void loop1() {
-  display.updateDisplay();
-}
 
 
+
+// ========== Interrupt Handlers ==========
+
+/**
+ * @brief NRF24L01 radio module interrupt handler.
+ * Records precise timestamp when RF data becomes available.
+ * Called on falling edge of NRF interrupt pin.
+ */
 void handleInterrupt() {
-  noInterrupts();
-  currMeasurement.NRFInterruptTime = to_us_since_boot(get_absolute_time());
-  currMeasurement.NRFInterruptFlag = true;
-  interrupts();
+    noInterrupts();
+    currMeasurement.nrfInterruptTime = to_us_since_boot(get_absolute_time());
+    currMeasurement.nrfInterruptFlag = true;
+    interrupts();
 }
 
+/**
+ * @brief IR sensor interrupt handler for start/finish detection.
+ * Records robot passage with microsecond precision.
+ * Determines if this is start gate or finish gate based on gate role.
+ */
 void handleInterruptIR() {
-  noInterrupts();
-  detachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN));
-  if (gate.start) {
-    currMeasurement.startInterruptTime = to_us_since_boot(get_absolute_time());
-    currMeasurement.startInterruptFlag = true;
-  } else {
-    currMeasurement.finishInterruptTime = to_us_since_boot(get_absolute_time());
-    currMeasurement.finishInterruptFlag = true;
-  }
-  interrupts();
+    noInterrupts();
+    detachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN));
+    
+    uint64_t currentTimestamp = to_us_since_boot(get_absolute_time());
+    
+    if (gate.isStart) {
+        // Start gate: record when robot crosses start line
+        currMeasurement.startInterruptTime = currentTimestamp;
+        currMeasurement.startInterruptFlag = true;
+    } else {
+        // Finish gate: record when robot crosses finish line
+        currMeasurement.finishInterruptTime = currentTimestamp;
+        currMeasurement.finishInterruptFlag = true;
+    }
+    
+    interrupts();
 }
 
 
-bool processQRCode(uint32_t scanEveryMs, String &qrCode) {
-  static uint32_t repeat_qr = 0;
+// ========== Input Processing Functions ==========
 
-  if (millis() - repeat_qr > scanEveryMs) 
+/**
+ * @brief QR code scanning with debouncing.
+ * Reads QR code from scanner with minimum interval between scans.
+ */
+bool processQRCode(uint32_t scanEveryMs, String &qrCode) {
+  static uint32_t repeatQRTimeout = 0;
+
+  if (millis() - repeatQRTimeout > scanEveryMs)
   {
-    qrCode = qr.readQRCode(false); // Pass 'true' to filter out corrupted data
+    qrCode = qr.readQRCode(false);
     if (qrCode.length() > 0) 
     {
       Serial.print("QR Code: ");
@@ -567,15 +588,19 @@ bool processQRCode(uint32_t scanEveryMs, String &qrCode) {
       qr.setMode(true, false, false);
       return true;
     }
-    repeat_qr = millis();
+    repeatQRTimeout = millis();
   }
   return false;
 }
 
+/**
+ * @brief RFID card scanning with debouncing.
+ * Reads RFID card with minimum interval between scans.
+ */
 bool processRFIDCard(uint32_t scanEveryMs, String &cardNumber) {
-  static uint32_t repeat_rfid = 0;
+  static uint32_t repeatRFIDTimeout = 0;
 
-  if (millis() - repeat_rfid > scanEveryMs) {
+  if (millis() - repeatRFIDTimeout > scanEveryMs) {
     cardNumber = readDataFromRFIDCard();
 
     if (cardNumber.length() > 0) 
@@ -584,14 +609,19 @@ bool processRFIDCard(uint32_t scanEveryMs, String &cardNumber) {
       Serial.println(cardNumber);
       return true;
     }
-    repeat_rfid = millis();
+    repeatRFIDTimeout = millis();
   }
 
   return false;
 }
 
+/**
+ * @brief Reads RFID card data via RC522 module.
+ * Extracts card UID and converts to hexadecimal string.
+ * @return Card UID as uppercase hex string, or empty string if no card detected.
+ */
 String readDataFromRFIDCard() {
-  digitalWrite(RC_522_SS, LOW);
+  digitalWrite(RC522_SS, LOW);
   rfid.antennaOn();
 
   static unsigned char status;
@@ -621,31 +651,44 @@ String readDataFromRFIDCard() {
 
   rfid.halt(); // Command the card to enter sleep mode
   rfid.antennaOff();
-  digitalWrite(RC_522_SS, HIGH);
+  digitalWrite(RC522_SS, HIGH);
   return cardNumber; // Return the card number as a String
 }
 
+// ========== Server Communication Functions ==========
 
-
-
+/**
+ * @brief Sends JSON message to central server.
+ * Formats command and data into JSON, adds line separator, and transmits via WiFi.
+ * 
+ * @param command Command identifier (e.g., "GET_SETTINGS", "GET_USER", "SEND_SCORE")
+ * @param data FirebaseJson object containing command payload
+ */
 void sendJsonMessage(const char* command, FirebaseJson& data) {
-  if (client.connected()) {
-    FirebaseJson json;
-    json.set("co", command);
-    json.set("da", data);
+    if (client.connected()) {
+        FirebaseJson json;
+        json.set("co", command);
+        json.set("da", data);
 
-    String jsonString;
-    json.toString(jsonString, true);
-    jsonString += "\n"; // Dodaj separator wiadomości
-    client.print(jsonString);
+        String jsonString;
+        json.toString(jsonString, true);
+        jsonString += "\n";
+        client.print(jsonString);
 
-    Serial.print("Wyslano JSON: ");
-    Serial.println(jsonString);
-  } else {
-      Serial.println("Brak polaczenia z serwerem. Nie mozna wyslac JSON-a.");
-  }
+        Serial.print("Sent JSON: ");
+        Serial.println(jsonString);
+    } else {
+        Serial.println("ERROR: Not connected to server. Cannot send JSON.");
+    }
 }
 
+/**
+ * @brief Processes incoming messages from central server.
+ * Parses JSON response, extracts command and data,
+ * and updates gate state accordingly.
+ * 
+ * @return True if response processed successfully, false on error
+ */
 bool handleServerResponse() {
   String command;
   while (client.available()) {
@@ -686,8 +729,8 @@ bool handleServerResponse() {
     
     if (command == "SETTINGS") //                                                HANDLE SETTINGS
     {
-    newSettingsAvailiable = true; // Resetuj flagę
-    String startAddress, finishAddress;
+    newSettingsAvailable = true; // Resetuj flagę
+    String startNRFAddress, finishNRFAddress;
     if (daJson.get(jsonData, "pair_id")) { newGateSettings.pairID = jsonData.intValue; }
     if (daJson.get(jsonData, "active")) { newGateSettings.active = jsonData.boolValue; }
     if (daJson.get(jsonData, "start_gate_id")) { newGateSettings.startGateID = jsonData.intValue; }
@@ -695,12 +738,12 @@ bool handleServerResponse() {
     if (daJson.get(jsonData, "category_id")) { newGateSettings.categoryID = jsonData.intValue; }
     if (daJson.get(jsonData, "stage_id")) { newGateSettings.stageID = jsonData.intValue; }
     if (daJson.get(jsonData, "start_nrf")) {
-      startAddress = jsonData.stringValue;
-      strncpy((char*)newGateSettings.nrfStartAddress, startAddress.c_str(), sizeof(newGateSettings.nrfStartAddress) - 1);
+      startNRFAddress = jsonData.stringValue;
+      strncpy((char*)newGateSettings.nrfStartAddress, startNRFAddress.c_str(), sizeof(newGateSettings.nrfStartAddress) - 1);
     }
     if (daJson.get(jsonData, "finish_nrf")) {
-      finishAddress = jsonData.stringValue;
-      strncpy((char*)newGateSettings.nrfFinishAddress, finishAddress.c_str(), sizeof(newGateSettings.nrfFinishAddress) - 1);
+      finishNRFAddress = jsonData.stringValue;
+      strncpy((char*)newGateSettings.nrfFinishAddress, finishNRFAddress.c_str(), sizeof(newGateSettings.nrfFinishAddress) - 1);
     }
 
     if (daJson.get(jsonData, "requires_user_card")) { newGateSettings.requiredUserCard = jsonData.boolValue; }
@@ -714,8 +757,8 @@ bool handleServerResponse() {
     } 
     else if (command == "USER") //                                                HANDLE USER
     {
-      currMeasurement.getUserRecieved = true;
-      if (daJson.get(jsonData, "player_rfid_code")) {currMeasurement.playerCardCode = jsonData.intValue;}
+      currMeasurement.getUserReceived = true;
+      if (daJson.get(jsonData, "player_rfid_code")) {currMeasurement.playerCardCode = jsonData.stringValue;}
       if (daJson.get(jsonData, "player_id")) {currMeasurement.playerID = jsonData.intValue;}
       if (daJson.get(jsonData, "player_name")) {currMeasurement.playerName = jsonData.stringValue;}
       
@@ -725,7 +768,7 @@ bool handleServerResponse() {
     } 
     else if (command == "ROBOT") //                                                HANDLE ROBOT
     {
-      currMeasurement.getRobotRecieved = true;
+      currMeasurement.getRobotReceived = true;
       String status;
       if (daJson.get(jsonData, "robot_qr_code")) {currMeasurement.robotQrCode = jsonData.stringValue;}
       if (daJson.get(jsonData, "robot_id")) {currMeasurement.robotID = jsonData.intValue;}
@@ -738,13 +781,13 @@ bool handleServerResponse() {
     else if (command == "RETRY_JUDGE") //                                          HANDLE RETRY_JUDGE
     {
       if (daJson.get(jsonData, "message")) { currMeasurement.lastMessage = jsonData.stringValue; }
-      currMeasurement.retryJudgeRecieved = true;
+      currMeasurement.retryJudgeReceived = true;
       currMeasurement.lastMessage = jsonData.stringValue;
     }
 
     else if (command == "JUDGE") //                                               HANDLE JUDGE
     {
-      currMeasurement.getJudgeRecieved = true;
+      currMeasurement.getJudgeReceived = true;
       if (daJson.get(jsonData, "judge_card_code")) {currMeasurement.judgeCardCode = jsonData.stringValue;}
       if (daJson.get(jsonData, "judge_id")) {currMeasurement.judgeID = jsonData.intValue;}
       Serial.print("Dane GET_JUDGE: ");
@@ -754,7 +797,7 @@ bool handleServerResponse() {
     else if (command == "RETRY_SCORE") //                                               HANDLE SCORE
     {
       if (daJson.get(jsonData, "message")) {currMeasurement.lastMessage = jsonData.stringValue;}
-      currMeasurement.retryScoreRecieved = true;
+      currMeasurement.retryScoreReceived = true;
       currMeasurement.lastMessage = jsonData.stringValue;
     }
 
@@ -773,83 +816,98 @@ bool handleServerResponse() {
   return true;
 }
 
+// ========== Radio Communication Functions ==========
 
+/**
+ * @brief Listens for incoming signals from paired gate.
+ * Processes radio commands: time synchronization, start, finish signals.
+ * Called periodically when gate is not transmitting.
+ */
 void listenForSignals() {
-  // Odbierz dane
-  if (radio.available()) {
-    Serial.println("Data available");
+    if (radio.available()) {
+        Serial.println("Radio data available");
 
-    //radio.stopListening();     // Przestań nasłuchiwać
-    Data_Package nrf_data;
-    radio.read(&nrf_data, sizeof(Data_Package));
+        DataPackage nrfData;
+        radio.read(&nrfData, sizeof(DataPackage));
 
-    switch (nrf_data.command) {
-        case 0x01: // Time synchronization command
-            if (currMeasurement.NRFInterruptTime == 0) {
-                Serial.println("No time received by interrupt");
+        switch (nrfData.command) {
+            // Time synchronization request from transmitter
+            case RF24_CMD_TIME_SYNC:
+                if (currMeasurement.nrfInterruptTime == 0) {
+                    Serial.println("Error: No interrupt timestamp available");
+                    break;
+                }
+                Serial.println("Time synchronization request received");
+                Serial.println(nrfData.time);
+                currMeasurement.syncSuccess = synchronizeTimeReceiver(currMeasurement.nrfInterruptTime);
                 break;
-            }
-            Serial.println("Time synchronization command received");
-            Serial.println(nrf_data.time);
-            currMeasurement.synchroSuccess = synchronize_time_receiver(currMeasurement.NRFInterruptTime);
-            break;  
 
-        case 0x02: // Send synchro time
-            Serial.println("Resend synchro time command received");
-            sendTime(currMeasurement.synchroTime);
-            break;  
-          
-        case 0x03: // 0x03 represents "START"
-            Serial.println("START command received");
-            currMeasurement.startInterruptFlag = 1;
-            currMeasurement.startInterruptTime = nrf_data.time;
-            break;
+            // Request to resend synchronization time
+            case RF24_CMD_RESEND_TIME:
+                Serial.println("Resend sync time request received");
+                sendTime(currMeasurement.syncTime);
+                break;
 
-        case 0x04: // 0x04 represents "STOP"
-            Serial.println("FINISH command received");
-            currMeasurement.finishInterruptFlag = 1;
-            currMeasurement.finalTime = nrf_data.time;
-            Serial.println(nrf_data.time);
-            break;
+            // Start gate signal (finish gate receives this)
+            case RF24_CMD_START:
+                Serial.println("START signal received");
+                currMeasurement.startInterruptFlag = true;
+                currMeasurement.startInterruptTime = nrfData.time;
+                break;
 
-        default:  
-            break;
-    }
+            // Finish gate signal (start gate receives this)
+            case RF24_CMD_FINISH:
+                Serial.println("FINISH signal received");
+                currMeasurement.finishInterruptFlag = true;
+                currMeasurement.finalTime = nrfData.time;
+                Serial.println(nrfData.time);
+                break;
+
+            default:
+                break;
+        }
     radio.maskIRQ(true, true, false);
     radio.startListening();
 
   }
 }
 
+// ========== Time Synchronization Functions ==========
 
-bool synchronize_time_transmitter() {
+/**
+ * @brief Synchronizes time as transmitter (start gate).
+ * Performs 2-way handshake with receiver to measure clock offset.
+ * 
+ * @return True if synchronization successful, false on timeout/error
+ */
+bool synchronizeTimeTransmitter() {
     uint64_t receiverTime = 0;
     uint64_t roundTripTimeStart = 0;
     uint64_t roundTripTimeEnd = 0;
     uint64_t roundTripTime = 0;
 
-    currMeasurement.NRFInterruptFlag = false;
-    currMeasurement.NRFInterruptTime = 0;
-    currMeasurement.synchroTime = 0;
+    currMeasurement.nrfInterruptFlag = false;
+    currMeasurement.nrfInterruptTime = 0;
+    currMeasurement.syncTime = 0;
 
     radio.maskIRQ(false, true, true);
     delay(10);
     
-    Data_Package nrf_data;
-    nrf_data.command = 0x01;
-    nrf_data.time = micros();
+    DataPackage nrfData;
+    nrfData.command = 0x01;
+    nrfData.time = micros();
     Serial.println("Sernding synchronization command");
-    Serial.println(nrf_data.time);
+    Serial.println(nrfData.time);
     radio.stopListening();
-    if (!radio.write(&nrf_data, sizeof(Data_Package))) {
+    if (!radio.write(&nrfData, sizeof(DataPackage))) {
         Serial.println("Failed to send synchronization command.");
         return false;
     }
-    roundTripTimeStart = currMeasurement.NRFInterruptTime;
-    currMeasurement.synchroTime = currMeasurement.NRFInterruptTime;
-    currMeasurement.NRFInterruptFlag = false;
+    roundTripTimeStart = currMeasurement.nrfInterruptTime;
+    currMeasurement.syncTime = currMeasurement.nrfInterruptTime;
+    currMeasurement.nrfInterruptFlag = false;
 
-    if (currMeasurement.synchroTime == 0) {
+    if (currMeasurement.syncTime == 0) {
       Serial.println("NOT VALID INTERRUPT.");
       return false;
     }
@@ -859,30 +917,30 @@ bool synchronize_time_transmitter() {
     radio.startListening();
     
     waitForRadio(50000);
-    roundTripTimeEnd = currMeasurement.NRFInterruptTime;
+    roundTripTimeEnd = currMeasurement.nrfInterruptTime;
     Serial.println(roundTripTimeEnd);
 
     // Read the receiver's time
     if (radio.available()) {
-      radio.read(&nrf_data, sizeof(Data_Package));
-      Serial.println(nrf_data.command);
-      Serial.println(nrf_data.time);
+      radio.read(&nrfData, sizeof(DataPackage));
+      Serial.println(nrfData.command);
+      Serial.println(nrfData.time);
 
-      //if (nrf_data.command != 123456789) {
+      //if (nrfData.command != 123456789) {
       //  Serial.println("Invalid command received.");
       //  receiverTime = requestTimeWithRetries(10, 50000);
       //}
       //else {
-        receiverTime = nrf_data.time;
+        receiverTime = nrfData.time;
       //}
-      currMeasurement.timeDiffrence = (int64_t)currMeasurement.synchroTime - (int64_t)receiverTime - 167;
+      currMeasurement.timeDifference = (int64_t)currMeasurement.syncTime - (int64_t)receiverTime - 167;
       
       Serial.print("Transmitter time: \t");
-      Serial.print(currMeasurement.synchroTime);
+      Serial.print(currMeasurement.syncTime);
       Serial.print("\tReceiver time: \t");
       Serial.print(receiverTime);
       Serial.print("\tTime difference: \t");
-      Serial.print(currMeasurement.timeDiffrence);
+      Serial.print(currMeasurement.timeDifference);
       Serial.print("\tRound trip time: \t");
       Serial.println(roundTripTimeEnd - roundTripTimeStart - 5000);
     } else {
@@ -895,25 +953,25 @@ bool synchronize_time_transmitter() {
 
 
 
-bool synchronize_time_receiver(uint32_t last_received_interrupt_time) {
-  currMeasurement.synchroTime = 0; 
-  uint32_t synchro_time = last_received_interrupt_time;
-  Data_Package nrf_data;
+bool synchronizeTimeReceiver(uint32_t lastReceivedInterruptTime) {
+  currMeasurement.syncTime = 0;
+  uint32_t synchro_time = lastReceivedInterruptTime;
+  DataPackage nrfData;
   //radio.flush_tx();
   delayMicroseconds(5000);
-  nrf_data.command = 123456789; // 
-  nrf_data.time = synchro_time;
+  nrfData.command = 123456789; // 
+  nrfData.time = synchro_time;
   radio.stopListening();
-  if (!radio.write(&nrf_data, sizeof(Data_Package))) {
+  if (!radio.write(&nrfData, sizeof(DataPackage))) {
     Serial.println("Failed to send current time.");
-    currMeasurement.synchroTime = 0;
-    currMeasurement.synchroSuccess = 0;
-    currMeasurement.NRFInterruptFlag = false;
+    currMeasurement.syncTime = 0;
+    currMeasurement.syncSuccess = 0;
+    currMeasurement.nrfInterruptFlag = false;
     return false;
   }
   else {  
     Serial.print("Time sent successfullyyyyyyy.\n");
-    currMeasurement.synchroTime = last_received_interrupt_time;
+    currMeasurement.syncTime = lastReceivedInterruptTime;
     Serial.println(synchro_time);
     return true;
   }
@@ -921,12 +979,12 @@ bool synchronize_time_receiver(uint32_t last_received_interrupt_time) {
 
 
 bool sendTime(uint32_t time) {
-  Data_Package nrf_data;
-  nrf_data.command = 123456789;
-  nrf_data.time = time;
+  DataPackage nrfData;
+  nrfData.command = 123456789;
+  nrfData.time = time;
   delayMicroseconds(5000);
   radio.stopListening();
-  if (!radio.write(&nrf_data, sizeof(Data_Package))) {
+  if (!radio.write(&nrfData, sizeof(DataPackage))) {
     Serial.println("Failed to send current time.");
     return false;
   }
@@ -941,24 +999,24 @@ bool sendTime(uint32_t time) {
 
 bool waitForRadio(unsigned long timeout) {
   unsigned long start_time = micros();
-  while (!currMeasurement.NRFInterruptFlag && (micros() - start_time < timeout)) {}
-  currMeasurement.NRFInterruptFlag = false;
+  while (!currMeasurement.nrfInterruptFlag && (micros() - start_time < timeout)) {}
+  currMeasurement.nrfInterruptFlag = false;
   return true;
 }
 
 
 
 uint32_t requestTimeWithRetries(uint8_t maxRetries, unsigned long waitDuration) {
-    Data_Package nrf_data;
+    DataPackage nrfData;
     uint32_t validTime = 0;
     
 
     for (uint8_t attempt = 0; attempt < maxRetries; ++attempt) {
-        nrf_data.command = 0x02;
-        nrf_data.time = 0;
+        nrfData.command = 0x02;
+        nrfData.time = 0;
         
         radio.stopListening();
-        if (!radio.write(&nrf_data, sizeof(Data_Package))) {
+        if (!radio.write(&nrfData, sizeof(DataPackage))) {
             Serial.println("Failed to request time.");
         }
 
@@ -967,9 +1025,9 @@ uint32_t requestTimeWithRetries(uint8_t maxRetries, unsigned long waitDuration) 
         waitForRadio(waitDuration);
 
         if (radio.available()) {
-            radio.read(&nrf_data, sizeof(Data_Package));
-            if (nrf_data.command == 123456789) {
-                validTime = nrf_data.time;
+            radio.read(&nrfData, sizeof(DataPackage));
+            if (nrfData.command == 123456789) {
+                validTime = nrfData.time;
                 Serial.print("Valid time received on attempt ");
                 Serial.print(attempt + 1);
                 Serial.print(": ");
@@ -990,29 +1048,29 @@ uint32_t requestTimeWithRetries(uint8_t maxRetries, unsigned long waitDuration) 
 
 
 bool sendStartCommand() {
-    Data_Package nrf_data;
-    nrf_data.command = 0x03;
-    nrf_data.time = (uint64_t)((int64_t)currMeasurement.startInterruptTime - currMeasurement.timeDiffrence);
+    DataPackage nrfData;
+    nrfData.command = 0x03;
+    nrfData.time = (uint64_t)((int64_t)currMeasurement.startInterruptTime - currMeasurement.timeDifference);
     
     radio.stopListening();
-    if (!radio.write(&nrf_data, sizeof(Data_Package))) {
+    if (!radio.write(&nrfData, sizeof(DataPackage))) {
         Serial.println("Failed to send start command.");
         radio.startListening();
         return false;
     }
-    return true;
     radio.startListening();
+    return true;
 }
 
 
 bool sendFinishCommand() {
-    Data_Package nrf_data;
-    nrf_data.command = 0x04;
+    DataPackage nrfData;
+    nrfData.command = 0x04;
 
-    nrf_data.time = currMeasurement.finalTime;
+    nrfData.time = currMeasurement.finalTime;
 
     radio.stopListening();
-    if (!radio.write(&nrf_data, sizeof(Data_Package))) {
+    if (!radio.write(&nrfData, sizeof(DataPackage))) {
         Serial.println("Failed to send finish command.");
         radio.startListening();
         return false;
@@ -1023,21 +1081,21 @@ bool sendFinishCommand() {
 
 
 bool checkIR(uint32_t timeout) {
-  static uint32_t time_brake_sensor = 0;
-  static bool ir_brake_active = false;
+  static uint32_t timeBrakeSensor = 0;
+  static bool irBrakeActive = false;
 
   if (digitalRead(IR_IRQ_PIN) == LOW) {
-    if (!ir_brake_active) {
-      time_brake_sensor = millis();
-      ir_brake_active = true;
-    } else if (millis() - time_brake_sensor > timeout) {
+    if (!irBrakeActive) {
+      timeBrakeSensor = millis();
+      irBrakeActive = true;
+    } else if (millis() - timeBrakeSensor > timeout) {
       //screen_line2 = "IRerror";
     }
   } else {
-    if (ir_brake_active) {
+    if (irBrakeActive) {
       //screen_line2 = "";
     }
-    ir_brake_active = false;
+    irBrakeActive = false;
   }
   return true;
 }
@@ -1055,30 +1113,30 @@ void resetMeasurement(Measurement &measurement) {
     measurement.judgeCardCode = "";
     measurement.judgeID = 0;
 
-    measurement.NRFInterruptTime = 0;
-    measurement.NRFInterruptFlag = false;
+    measurement.nrfInterruptTime = 0;
+    measurement.nrfInterruptFlag = false;
 
-    measurement.synchroCounter = 0;
-    measurement.synchroSuccess = 0;
-    measurement.synchroTime = 0;
-    measurement.timeDiffrence = 0;
+    measurement.syncCounter = 0;
+    measurement.syncSuccess = 0;
+    measurement.syncTime = 0;
+    measurement.timeDifference = 0;
 
     measurement.startInterruptTime = 0;
     measurement.finishInterruptTime = 0;
     measurement.startInterruptFlag = false;
     measurement.finishInterruptFlag = false;
 
-    measurement.counter_m = 0;
-    measurement.counter_s = 0;
-    measurement.counter_ms = 0;
-    measurement.finalFormatedTime = "";
+    measurement.counterMinutes = 0;
+    measurement.counterSeconds = 0;
+    measurement.counterMilliseconds = 0;
+    measurement.finalFormattedTime = "";
     measurement.finalTime = 0;
 
-    measurement.getUserRecieved = false;
-    measurement.getRobotRecieved = false;
-    measurement.getJudgeRecieved = false;
-    measurement.retryJudgeRecieved = false;
-    measurement.retryScoreRecieved = false;
+    measurement.getUserReceived = false;
+    measurement.getRobotReceived = false;
+    measurement.getJudgeReceived = false;
+    measurement.retryJudgeReceived = false;
+    measurement.retryScoreReceived = false;
 
     measurement.resetCommandSend = false;
     measurement.lastMessage = "";
@@ -1134,11 +1192,11 @@ void handleUserReset()
 
 void applyNewGateSettings() {
   
-  if (!newSettingsAvailiable) {
+  if (!newSettingsAvailable) {
     return;
   }
   Serial.println("Applying new settings...");
-  newSettingsAvailiable = false;
+  newSettingsAvailable = false;
   // Przypisz wszystkie ustawienia z newGateSettings do gate
   gate.pairID = newGateSettings.pairID;
   gate.active = newGateSettings.active;
@@ -1159,15 +1217,15 @@ void applyNewGateSettings() {
 
   // Konfiguracja bramki w zależności od typu
   if (gate.typeName == "START") {
-      gate.start = true;
-      gate.finish = false;
+      gate.isStart = true;
+      gate.isFinish = false;
       radio.openWritingPipe(gate.nrfStartAddress); // Adres startowy już przypisany w handleServerResponse
       radio.openReadingPipe(1, gate.nrfFinishAddress); // Adres końcowy już przypisany w handleServerResponse
       radio.stopListening();
       Serial.println("Role set to TRANSMITTER");
   } else if (gate.typeName == "FINISH") {
-     gate.start = false;
-      gate.finish = true;
+     gate.isStart = false;
+      gate.isFinish = true;
       radio.openWritingPipe(gate.nrfFinishAddress); // Adres końcowy już przypisany w handleServerResponse
       radio.openReadingPipe(1, gate.nrfStartAddress); // Adres startowy już przypisany w handleServerResponse
       radio.startListening();

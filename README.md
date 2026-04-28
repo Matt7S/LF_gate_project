@@ -6,7 +6,8 @@ An advanced, smart timing gate system designed for Line Follower and other robot
 ## ✨ Key Features
 * **Precise Time Measurement:** Utilizes hardware interrupts via an IR sensor for millisecond accuracy.
 * **Wireless Gate Synchronization:** Uses NRF24L01 modules to synchronize the Start and Finish gates and transmit timestamps.
-* **Smart Authentication:** * **RFID Scanner (RC522):** Used for competitor and judge authentication.
+* **Smart Authentication:** 
+  * **RFID Scanner (RC522):** Used for competitor and judge authentication.
   * **QR/Barcode Scanner (I2C):** Used to identify and verify specific robots before the run.
 * **Live Display:** Outputs dynamic messages and live timers directly to a P10 LED Matrix Display.
 * **Wi-Fi Cloud Integration:** Connects to a central server to fetch gate settings, validate users/robots, and submit final run scores using JSON payloads.
@@ -21,7 +22,7 @@ An advanced, smart timing gate system designed for Line Follower and other robot
   * `FirebaseJson` (JSON parsing for server communication)
 
 ## 📌 Hardware Pinout
-Based on the default configuration in `main.cpp`:
+Based on the default configuration in `constants.hpp`:
 
 | Component | Pin (GPIO) | Description |
 | :--- | :--- | :--- |
@@ -39,7 +40,7 @@ This project is built using **PlatformIO**.
 
 ```bash
 # Clone the repository
-git clone [https://github.com/Matt7S/LF_gate_project.git](https://github.com/Matt7S/LF_gate_project.git)
+git clone https://github.com/Matt7S/LF_gate_project.git
 
 # Navigate to the project directory
 cd LF_gate_project
@@ -57,6 +58,41 @@ The gate operates using a continuous state machine to handle the flow of the com
 4. **START / FINISH:** The IR sensor detects the robot passing through, capturing high-precision timestamps.
 5. **JUDGE_CONFIRMATION:** If required, a judge scans their RFID card to validate the run.
 6. **CONFIRMATION:** The operator uses physical buttons to Accept, Cancel, or mark the run as a Forfeit, sending the final JSON payload to the server.
+
+## 📁 Project Structure
+```
+LF_gate_project/
+├── include/
+│   └── constants.hpp          # Centralized constants and pin definitions
+├── lib/                       # External libraries
+├── src/
+│   ├── main.cpp              # Main state machine implementation
+│   └── main.hpp              # Data structures and function prototypes
+├── test/                      # Unit tests
+├── platformio.ini            # PlatformIO configuration
+└── README.md                 # This file
+```
+
+## 🏗️ Code Organization
+
+### Core Components:
+- **State Machine:** Implements competition flow with 11 distinct states
+- **Hardware Abstraction:** Wrapper classes for RF24, RFID, QR scanner, LED display
+- **Communication:** Dual-protocol support (WiFi/JSON for server, RF24 for gate-to-gate)
+- **Timing System:** Microsecond-precision interrupt-driven measurements
+
+### Key Files:
+- `constants.hpp` - All pin definitions and configuration constants (DRY principle)
+- `main.hpp` - Comprehensive data structures with JSDoc documentation
+- `main.cpp` - State machine and business logic with inline documentation
+
+## 📚 Code Quality Improvements
+This project follows professional C++ coding standards:
+- **Naming Conventions:** camelCase for variables/functions, UPPERCASE for constants
+- **Documentation:** JSDoc-style comments for all functions and structures
+- **Constants:** Centralized in `constants.hpp` to avoid magic numbers
+- **Code Organization:** Clear sections with descriptive headers
+- **Error Handling:** Meaningful error messages in Serial output
 
 ## 🤝 Contributing
 Contributions, issues, and feature requests are welcome!
