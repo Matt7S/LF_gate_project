@@ -147,7 +147,8 @@ void loop() {
   {
     HardwareControl::monitorIRSensor(1000);
     
-    String prompt = String(gate.categoryName).concat(" Please scan your card");
+    String prompt = String(gate.categoryName);
+    prompt += " Please scan your card";
     HardwareControl::displayMessage(0, prompt, DISPLAY_SPEED_FAST, true);
     HardwareControl::displayMessage(1, gate.typeName, DISPLAY_SPEED_FAST, true);
 
@@ -177,7 +178,9 @@ void loop() {
   case ROBOT_AUTHENTICATION:
   {
     if (!currMeasurement.getRobotReceived) {
-      String prompt = String("Hello ").concat(currMeasurement.playerName).concat(" Please scan Robot QR code");
+      String prompt = String("Hello ");
+      prompt += currMeasurement.playerName;
+      prompt += " Please scan Robot QR code";
       HardwareControl::displayMessage(0, prompt, DISPLAY_SPEED_FAST, true);
       HardwareControl::displayMessage(1, gate.typeName, DISPLAY_SPEED_FAST, true);
 
@@ -195,19 +198,24 @@ void loop() {
     }
     else {
       Authentication::setQRMode(true, false, false);
-      String greeting = String("Hello ").concat(currMeasurement.robotName);
+      String greeting = String("Hello ");
+      greeting += currMeasurement.robotName;
       HardwareControl::displayMessage(0, greeting, DISPLAY_SPEED_FAST, true);
       HardwareControl::displayMessage(1, gate.typeName, DISPLAY_SPEED_FAST, true);
 
       if (StateManager::waitForStateTransition(2000)) {
         if (gate.isStart) {
           attachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN), handleInterruptIR, RISING);
-          String prompt = String("Place robot ").concat(currMeasurement.robotName).concat(" on the start gate and good luck!");
+          String prompt = String("Place robot ");
+          prompt += currMeasurement.robotName;
+          prompt += " on the start gate and good luck!";
           HardwareControl::displayMessage(0, prompt, DISPLAY_SPEED_FAST, true);
           HardwareControl::displayMessage(1, gate.typeName, DISPLAY_SPEED_FAST, true);
           HardwareControl::startBlinking(1, 250);
         } else {
-          String prompt = String("Place robot ").concat(currMeasurement.robotName).concat(" on the start gate and good luck!");
+          String prompt = String("Place robot ");
+          prompt += currMeasurement.robotName;
+          prompt += " on the start gate and good luck!";
           HardwareControl::displayMessage(0, prompt, DISPLAY_SPEED_FAST, true);
           HardwareControl::displayMessage(1, gate.typeName, DISPLAY_SPEED_FAST, true);
         }
