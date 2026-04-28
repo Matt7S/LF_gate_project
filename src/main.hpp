@@ -1,4 +1,8 @@
+#ifndef MAIN_HPP
+#define MAIN_HPP
+
 #include <Arduino.h>
+#include <FirebaseJson.h>
 #include "constants.hpp"
 
 /**
@@ -275,3 +279,5 @@ void handleUserReset();
  * Configures RF24 as transmitter (start) or receiver (finish).
  */
 void applyNewGateSettings();
+
+#endif  // MAIN_HPP
