@@ -7,6 +7,8 @@
  */
 
 #include "ServerCommunication.hpp"
+#include "Measurement.hpp"
+#include "StateManager.hpp"
 
 // Forward declarations for functions defined in main.cpp
 extern void connectToWiFi();
@@ -75,65 +77,71 @@ bool ServerCommunication::handleServerResponse() {
             applyGateSettings(daJson);
         } 
         else if (command == "USER") {
-            currMeasurement.getUserReceived = true;
+            Measurement& meas = MeasurementManager::getCurrentMeasurement();
+            meas.getUserReceived = true;
             if (daJson.get(jsonData, "player_rfid_code")) {
-                currMeasurement.playerCardCode = jsonData.stringValue;
+                meas.playerCardCode = jsonData.stringValue;
             }
             if (daJson.get(jsonData, "player_id")) {
-                currMeasurement.playerID = jsonData.intValue;
+                meas.playerID = jsonData.intValue;
             }
             if (daJson.get(jsonData, "player_name")) {
-                currMeasurement.playerName = jsonData.stringValue;
+                meas.playerName = jsonData.stringValue;
             }
             
             Serial.print("GET_USER data: ");
-            Serial.println(currMeasurement.playerName);
+            Serial.println(meas.playerName);
         } 
         else if (command == "ROBOT") {
-            currMeasurement.getRobotReceived = true;
+            Measurement& meas = MeasurementManager::getCurrentMeasurement();
+            meas.getRobotReceived = true;
             if (daJson.get(jsonData, "robot_qr_code")) {
-                currMeasurement.robotQrCode = jsonData.stringValue;
+                meas.robotQrCode = jsonData.stringValue;
             }
             if (daJson.get(jsonData, "robot_id")) {
-                currMeasurement.robotID = jsonData.intValue;
+                meas.robotID = jsonData.intValue;
             }
             if (daJson.get(jsonData, "robot_name")) {
-                currMeasurement.robotName = jsonData.stringValue;
+                meas.robotName = jsonData.stringValue;
             }
 
             Serial.print("Robot status: ");
-            Serial.println(currMeasurement.robotName);
+            Serial.println(meas.robotName);
         } 
         else if (command == "RETRY_JUDGE") {
+            Measurement& meas = MeasurementManager::getCurrentMeasurement();
             if (daJson.get(jsonData, "message")) {
-                currMeasurement.lastMessage = jsonData.stringValue;
+                meas.lastMessage = jsonData.stringValue;
             }
-            currMeasurement.retryJudgeReceived = true;
+            meas.retryJudgeReceived = true;
         }
         else if (command == "JUDGE") {
-            currMeasurement.getJudgeReceived = true;
+            Measurement& meas = MeasurementManager::getCurrentMeasurement();
+            meas.getJudgeReceived = true;
             if (daJson.get(jsonData, "judge_card_code")) {
-                currMeasurement.judgeCardCode = jsonData.stringValue;
+                meas.judgeCardCode = jsonData.stringValue;
             }
             if (daJson.get(jsonData, "judge_id")) {
-                currMeasurement.judgeID = jsonData.intValue;
+                meas.judgeID = jsonData.intValue;
             }
             Serial.print("GET_JUDGE data: ");
-            Serial.println(currMeasurement.judgeID);
+            Serial.println(meas.judgeID);
         }
         else if (command == "RETRY_SCORE") {
+            Measurement& meas = MeasurementManager::getCurrentMeasurement();
             if (daJson.get(jsonData, "message")) {
-                currMeasurement.lastMessage = jsonData.stringValue;
+                meas.lastMessage = jsonData.stringValue;
             }
-            currMeasurement.retryScoreReceived = true;
+            meas.retryScoreReceived = true;
         }
         else if (command == "RESET") {
             Serial.println("RESET command received");
+            Measurement& meas = MeasurementManager::getCurrentMeasurement();
             if (daJson.get(jsonData, "message")) {
-                currMeasurement.lastMessage = jsonData.stringValue;
+                meas.lastMessage = jsonData.stringValue;
             }
-            currentState = RESETING;
-        } 
+            StateManager::setState(RESETING);
+        }
         else {
             Serial.println("Unknown command.");
             return false;

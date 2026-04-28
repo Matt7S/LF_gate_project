@@ -18,33 +18,33 @@ void RadioCommunication::listenForSignals() {
         switch (nrfData.command) {
             // Time synchronization request from transmitter
             case RF24_CMD_TIME_SYNC:
-                if (currMeasurement.nrfInterruptTime == 0) {
+                if (MeasurementManager::getCurrentMeasurement().nrfInterruptTime == 0) {
                     Serial.println("Error: No interrupt timestamp available");
                     break;
                 }
                 Serial.println("Time synchronization request received");
                 Serial.println(nrfData.time);
-                currMeasurement.syncSuccess = synchronizeTimeReceiver(currMeasurement.nrfInterruptTime);
+                MeasurementManager::getCurrentMeasurement().syncSuccess = synchronizeTimeReceiver(MeasurementManager::getCurrentMeasurement().nrfInterruptTime);
                 break;
 
             // Request to resend synchronization time
             case RF24_CMD_RESEND_TIME:
                 Serial.println("Resend sync time request received");
-                sendTime(currMeasurement.syncTime);
+                sendTime(MeasurementManager::getCurrentMeasurement().syncTime);
                 break;
 
             // Start gate signal (finish gate receives this)
             case RF24_CMD_START:
                 Serial.println("START signal received");
-                currMeasurement.startInterruptFlag = true;
-                currMeasurement.startInterruptTime = nrfData.time;
+                MeasurementManager::getCurrentMeasurement().startInterruptFlag = true;
+                MeasurementManager::getCurrentMeasurement().startInterruptTime = nrfData.time;
                 break;
 
             // Finish gate signal (start gate receives this)
             case RF24_CMD_FINISH:
                 Serial.println("FINISH signal received");
-                currMeasurement.finishInterruptFlag = true;
-                currMeasurement.finalTime = nrfData.time;
+                MeasurementManager::getCurrentMeasurement().finishInterruptFlag = true;
+                MeasurementManager::getCurrentMeasurement().finalTime = nrfData.time;
                 Serial.println(nrfData.time);
                 break;
 
@@ -62,9 +62,9 @@ bool RadioCommunication::synchronizeTimeTransmitter() {
     uint64_t roundTripTimeEnd = 0;
     uint64_t roundTripTime = 0;
 
-    currMeasurement.nrfInterruptFlag = false;
-    currMeasurement.nrfInterruptTime = 0;
-    currMeasurement.syncTime = 0;
+    MeasurementManager::getCurrentMeasurement().nrfInterruptFlag = false;
+    MeasurementManager::getCurrentMeasurement().nrfInterruptTime = 0;
+    MeasurementManager::getCurrentMeasurement().syncTime = 0;
 
     radio.maskIRQ(false, true, true);
     delay(10);
@@ -79,11 +79,11 @@ bool RadioCommunication::synchronizeTimeTransmitter() {
         Serial.println("Failed to send synchronization command.");
         return false;
     }
-    roundTripTimeStart = currMeasurement.nrfInterruptTime;
-    currMeasurement.syncTime = currMeasurement.nrfInterruptTime;
-    currMeasurement.nrfInterruptFlag = false;
+    roundTripTimeStart = MeasurementManager::getCurrentMeasurement().nrfInterruptTime;
+    MeasurementManager::getCurrentMeasurement().syncTime = MeasurementManager::getCurrentMeasurement().nrfInterruptTime;
+    MeasurementManager::getCurrentMeasurement().nrfInterruptFlag = false;
 
-    if (currMeasurement.syncTime == 0) {
+    if (MeasurementManager::getCurrentMeasurement().syncTime == 0) {
         Serial.println("NOT VALID INTERRUPT.");
         return false;
     }
@@ -93,7 +93,7 @@ bool RadioCommunication::synchronizeTimeTransmitter() {
     radio.startListening();
     
     waitForRadio(50000);
-    roundTripTimeEnd = currMeasurement.nrfInterruptTime;
+    roundTripTimeEnd = MeasurementManager::getCurrentMeasurement().nrfInterruptTime;
     Serial.println(roundTripTimeEnd);
 
     // Read the receiver's time
@@ -103,14 +103,14 @@ bool RadioCommunication::synchronizeTimeTransmitter() {
         Serial.println(nrfData.time);
 
         receiverTime = nrfData.time;
-        currMeasurement.timeDifference = (int64_t)currMeasurement.syncTime - (int64_t)receiverTime - 167;
+        MeasurementManager::getCurrentMeasurement().timeDifference = (int64_t)MeasurementManager::getCurrentMeasurement().syncTime - (int64_t)receiverTime - 167;
         
         Serial.print("Transmitter time: \t");
-        Serial.print(currMeasurement.syncTime);
+        Serial.print(MeasurementManager::getCurrentMeasurement().syncTime);
         Serial.print("\tReceiver time: \t");
         Serial.print(receiverTime);
         Serial.print("\tTime difference: \t");
-        Serial.print(currMeasurement.timeDifference);
+        Serial.print(MeasurementManager::getCurrentMeasurement().timeDifference);
         Serial.print("\tRound trip time: \t");
         Serial.println(roundTripTimeEnd - roundTripTimeStart - 5000);
     } else {
@@ -121,7 +121,7 @@ bool RadioCommunication::synchronizeTimeTransmitter() {
 }
 
 bool RadioCommunication::synchronizeTimeReceiver(uint32_t lastReceivedInterruptTime) {
-    currMeasurement.syncTime = 0;
+    MeasurementManager::getCurrentMeasurement().syncTime = 0;
     uint32_t synchro_time = lastReceivedInterruptTime;
     DataPackage nrfData;
     
@@ -131,13 +131,13 @@ bool RadioCommunication::synchronizeTimeReceiver(uint32_t lastReceivedInterruptT
     radio.stopListening();
     if (!radio.write(&nrfData, sizeof(DataPackage))) {
         Serial.println("Failed to send current time.");
-        currMeasurement.syncTime = 0;
-        currMeasurement.syncSuccess = 0;
-        currMeasurement.nrfInterruptFlag = false;
+        MeasurementManager::getCurrentMeasurement().syncTime = 0;
+        MeasurementManager::getCurrentMeasurement().syncSuccess = 0;
+        MeasurementManager::getCurrentMeasurement().nrfInterruptFlag = false;
         return false;
     } else {  
         Serial.print("Time sent successfully.\n");
-        currMeasurement.syncTime = lastReceivedInterruptTime;
+        MeasurementManager::getCurrentMeasurement().syncTime = lastReceivedInterruptTime;
         Serial.println(synchro_time);
         return true;
     }
@@ -161,8 +161,8 @@ bool RadioCommunication::sendTime(uint32_t time) {
 
 bool RadioCommunication::waitForRadio(unsigned long timeout) {
     unsigned long start_time = micros();
-    while (!currMeasurement.nrfInterruptFlag && (micros() - start_time < timeout)) {}
-    currMeasurement.nrfInterruptFlag = false;
+    while (!MeasurementManager::getCurrentMeasurement().nrfInterruptFlag && (micros() - start_time < timeout)) {}
+    MeasurementManager::getCurrentMeasurement().nrfInterruptFlag = false;
     return true;
 }
 
@@ -208,7 +208,7 @@ uint32_t RadioCommunication::requestTimeWithRetries(uint8_t maxRetries, unsigned
 bool RadioCommunication::sendStartCommand() {
     DataPackage nrfData;
     nrfData.command = RF24_CMD_START;
-    nrfData.time = (uint64_t)((int64_t)currMeasurement.startInterruptTime - currMeasurement.timeDifference);
+    nrfData.time = (uint64_t)((int64_t)MeasurementManager::getCurrentMeasurement().startInterruptTime - MeasurementManager::getCurrentMeasurement().timeDifference);
     
     radio.stopListening();
     if (!radio.write(&nrfData, sizeof(DataPackage))) {
@@ -223,7 +223,7 @@ bool RadioCommunication::sendStartCommand() {
 bool RadioCommunication::sendFinishCommand() {
     DataPackage nrfData;
     nrfData.command = RF24_CMD_FINISH;
-    nrfData.time = currMeasurement.finalTime;
+    nrfData.time = MeasurementManager::getCurrentMeasurement().finalTime;
 
     radio.stopListening();
     if (!radio.write(&nrfData, sizeof(DataPackage))) {

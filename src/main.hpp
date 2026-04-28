@@ -122,6 +122,9 @@ struct Measurement {
     String lastMessage = "";             ///< Last message from server (for error display)
 };
 
+// ========== Global Variables ==========
+// Macro providing access to current measurement managed by MeasurementManager
+#define currMeasurement (MeasurementManager::getCurrentMeasurement())
 
 // ========== Function Prototypes ==========
 

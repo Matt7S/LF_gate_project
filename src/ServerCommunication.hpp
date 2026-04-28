@@ -22,8 +22,6 @@ extern WiFiClient client;
 extern Gate gate;
 extern Gate newGateSettings;
 extern bool newSettingsAvailable;
-extern Measurement currMeasurement;
-extern State currentState;
 
 /**
  * @class ServerCommunication
