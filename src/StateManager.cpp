@@ -4,6 +4,7 @@
  */
 
 #include "StateManager.hpp"
+#include <Arduino.h>
 
 // ===== Static Variables =====
 State StateManager::currentState = IDLE;

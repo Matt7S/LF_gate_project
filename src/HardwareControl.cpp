@@ -4,6 +4,8 @@
  */
 
 #include "HardwareControl.hpp"
+#include <Arduino.h>
+#include <cstdint>
 #include "P10Display.hpp"
 
 // ===== Static Variables =====

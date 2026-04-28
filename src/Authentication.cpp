@@ -3,7 +3,9 @@
  * @brief RFID and QR code authentication implementation.
  */
 
-#include "Authentication.cpp"
+#include "Authentication.hpp"
+#include <Arduino.h>
+#include <cstdint>
 #include <Freenove_RFID_Lib_for_Pico.h>
 #include <QRScanner.hpp>
 #include "constants.hpp"
