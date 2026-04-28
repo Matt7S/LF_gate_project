@@ -55,18 +55,18 @@ struct Measurement {
   String judgeCardCode = "";
   uint8_t judgeID = 0;
 
-  uint64_t NRFInterruptTime = 0;
-  bool NRFInterruptFlag = false;
+  volatile uint64_t NRFInterruptTime = 0;
+  volatile bool NRFInterruptFlag = false;
 
   uint8_t synchroCounter = 0;
   bool synchroSuccess = 0;
   uint64_t synchroTime = 0;
   int64_t timeDiffrence = 0;
 
-  uint64_t startInterruptTime = 0;
-  uint64_t finishInterruptTime = 0;
-  bool startInterruptFlag = false;
-  bool finishInterruptFlag = false;
+  volatile uint64_t startInterruptTime = 0;
+  volatile uint64_t finishInterruptTime = 0;
+  volatile bool startInterruptFlag = false;
+  volatile bool finishInterruptFlag = false;
 
   uint32_t counter_m = 0;
   uint32_t counter_s = 0;

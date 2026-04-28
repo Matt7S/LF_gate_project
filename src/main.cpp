@@ -9,7 +9,6 @@
 #include "wifi_config.hpp"
 #include "P10Display.hpp"
 #include "main.hpp"
-#include "pico/stdlib.h"
 
 
 // Define pins for SPI
@@ -142,11 +141,14 @@ void loop() {
   {
     applyNewGateSettings();
     Serial.println("IDLE");
-    if (gate.requiredUserCard && gate.requiredUserQrCode) 
-    {
-      currentState = USER_AUTHENTICATION;
-      Serial.println("RFID_WAITING");
-    } 
+    if (gate.active) {
+      if (gate.requiredUserCard && gate.requiredUserQrCode) 
+      {
+        currentState = USER_AUTHENTICATION;
+        Serial.println("RFID_WAITING");
+      } 
+    }
+    
     break;
   }
 
@@ -269,6 +271,7 @@ void loop() {
         Serial.println("QR_WAITING");
         qr.setMode(true, true, true);
       }
+      delay(5);
     } 
     else
     {
@@ -531,27 +534,23 @@ void loop1() {
 
 
 void handleInterrupt() {
-  currMeasurement.NRFInterruptFlag = true;
+  noInterrupts();
   currMeasurement.NRFInterruptTime = to_us_since_boot(get_absolute_time());
-  //Serial.print("NRF Interrupt: ");
-  //Serial.println(currMeasurement.NRFInterruptTime);
-
+  currMeasurement.NRFInterruptFlag = true;
+  interrupts();
 }
 
-
 void handleInterruptIR() {
+  noInterrupts();
+  detachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN));
   if (gate.start) {
     currMeasurement.startInterruptTime = to_us_since_boot(get_absolute_time());
-    currMeasurement.startInterruptFlag = 1;
-    //Serial.println("START Interrupt");
-    //Serial.println(currMeasurement.startInterruptTime);
+    currMeasurement.startInterruptFlag = true;
   } else {
     currMeasurement.finishInterruptTime = to_us_since_boot(get_absolute_time());
-    currMeasurement.finishInterruptFlag = 1;
-    //Serial.println("FINISH Interrupt");
-    //Serial.println(currMeasurement.finishInterruptTime);
+    currMeasurement.finishInterruptFlag = true;
   }
-  detachInterrupt(digitalPinToInterrupt(IR_IRQ_PIN));
+  interrupts();
 }
 
 
@@ -800,13 +799,13 @@ void listenForSignals() {
             sendTime(currMeasurement.synchroTime);
             break;  
           
-        case 0x03: // Assuming 0x03 represents "START"
+        case 0x03: // 0x03 represents "START"
             Serial.println("START command received");
             currMeasurement.startInterruptFlag = 1;
             currMeasurement.startInterruptTime = nrf_data.time;
             break;
 
-        case 0x04: // Assuming 0x04 represents "STOP"
+        case 0x04: // 0x04 represents "STOP"
             Serial.println("FINISH command received");
             currMeasurement.finishInterruptFlag = 1;
             currMeasurement.finalTime = nrf_data.time;

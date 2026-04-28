@@ -1,22 +1,22 @@
 #include "P10Display.hpp"
 #include "fonts.hpp"
 
-// Tablica cyfr i separatora ":"
-byte digits[10][5][3] = {
-  {{1, 1, 1}, {1, 0, 1}, {1, 0, 1}, {1, 0, 1}, {1, 1, 1}},  // 0
-  {{0, 1, 0}, {1, 1, 0}, {0, 1, 0}, {0, 1, 0}, {1, 1, 1}},  // 1
-  {{1, 1, 1}, {0, 0, 1}, {1, 1, 1}, {1, 0, 0}, {1, 1, 1}},  // 2
-  {{1, 1, 1}, {0, 0, 1}, {0, 1, 1}, {0, 0, 1}, {1, 1, 1}},  // 3
-  {{1, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 0, 1}, {0, 0, 1}},  // 4
-  {{1, 1, 1}, {1, 0, 0}, {1, 1, 1}, {0, 0, 1}, {1, 1, 1}},  // 5
-  {{1, 1, 1}, {1, 0, 0}, {1, 1, 1}, {1, 0, 1}, {1, 1, 1}},  // 6
-  {{1, 1, 1}, {0, 0, 1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}},  // 7
-  {{1, 1, 1}, {1, 0, 1}, {1, 1, 1}, {1, 0, 1}, {1, 1, 1}},  // 8
-  {{1, 1, 1}, {1, 0, 1}, {1, 1, 1}, {0, 0, 1}, {1, 1, 1}},  // 9
+byte digits[10][7][4] = {
+  {{0, 1, 1, 0}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {0, 1, 1, 0}},  // 0
+  {{0, 0, 1, 0}, {0, 1, 1, 0}, {1, 0, 1, 0}, {0, 0, 1, 0}, {0, 0, 1, 0}, {0, 0, 1, 0}, {1, 1, 1, 1}},  // 1
+  {{0, 1, 1, 0}, {1, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 1, 0}, {0, 1, 0, 0}, {1, 0, 0, 0}, {1, 1, 1, 1}},  // 2
+  {{1, 1, 1, 0}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 1, 1, 0}, {0, 0, 0, 1}, {0, 0, 0, 1}, {1, 1, 1, 0}},  // 3
+  {{1, 0, 0, 1}, {1, 0, 0, 1}, {1, 0, 0, 1}, {1, 1, 1, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}},  // 4
+  {{1, 1, 1, 1}, {1, 0, 0, 0}, {1, 0, 0, 0}, {1, 1, 1, 0}, {0, 0, 0, 1}, {0, 0, 0, 1}, {1, 1, 1, 0}},  // 5
+  {{0, 1, 1, 1}, {1, 0, 0, 0}, {1, 0, 0, 0}, {1, 1, 1, 0}, {1, 0, 0, 1}, {1, 0, 0, 1}, {0, 1, 1, 0}},  // 6
+  {{1, 1, 1, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 1, 0}, {0, 0, 1, 0}, {0, 0, 1, 0}, {0, 0, 1, 0}},  // 7
+  {{0, 1, 1, 0}, {1, 0, 0, 1}, {1, 0, 0, 1}, {0, 1, 1, 0}, {1, 0, 0, 1}, {1, 0, 0, 1}, {0, 1, 1, 0}},  // 8
+  {{0, 1, 1, 0}, {1, 0, 0, 1}, {1, 0, 0, 1}, {0, 1, 1, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {1, 1, 1, 0}}   // 9
 };
 
-// Separator ":" w formacie 5x1
-byte separator[5] = {0, 1, 0, 1, 0};
+
+// Separator ":" w formacie 7x1
+byte separator[7] = {0, 0, 1, 0, 1, 0, 0};
 
 
 P10Display::P10Display(uint8_t a, uint8_t b, uint8_t clk, uint8_t data, uint8_t latch, uint8_t oe)
@@ -79,11 +79,11 @@ void P10Display::refresh() {
 }
 
 
-void P10Display::default_timer(byte output[5][32]) {
+void P10Display::default_timer(byte output[7][32]) {
   // Funkcja pomocnicza do wstawiania cyfr do tablicy pikseli
   auto addDigit = [&](int digit, int colOffset) {
-    for (int row = 0; row < 5; row++) {
-      for (int col = 0; col < 3; col++) {
+    for (int row = 0; row < 7; row++) {
+      for (int col = 0; col < 4; col++) {
         output[row][colOffset + col] = digits[digit][row][col];
       }
     }
@@ -91,7 +91,7 @@ void P10Display::default_timer(byte output[5][32]) {
 
   // Funkcja pomocnicza do wstawiania separatora ":"
   auto addSeparator = [&](int colOffset) {
-    for (int row = 0; row < 5; row++) {
+    for (int row = 0; row < 7; row++) {
       output[row][colOffset] = separator[row];
     }
   };
@@ -101,19 +101,19 @@ void P10Display::default_timer(byte output[5][32]) {
   addDigit(counter_m % 10, 4);    // Druga cyfra minut
 
   // Separator
-  addSeparator(8);
+  addSeparator(7);
 
   // Sekundy
   addDigit(counter_s / 10, 10);   // Pierwsza cyfra sekund
   addDigit(counter_s % 10, 14);   // Druga cyfra sekund
 
   // Separator
-  addSeparator(18);
+  addSeparator(19);
 
   // Milisekundy (tylko pierwsze trzy cyfry)
   addDigit(counter_ms / 100, 20);              // Setki milisekund
   addDigit((counter_ms / 10) % 10, 24);        // Dziesiątki milisekund
-  addDigit(counter_ms % 10, 28);               // Jednostki milisekund
+  //addDigit(counter_ms % 10, 28);               // Jednostki milisekund
 
 
 }
@@ -122,10 +122,10 @@ void P10Display::default_timer_screen() {
   static uint64_t last_refresh = 0;
   
   if (millis() - last_refresh > refresh_time_ms) {
-    byte pixelArray[5][32] = {0};
+    byte pixelArray[7][32] = {0};
     default_timer(pixelArray);
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
       for (int j = 0; j < 32; j++) {
         user_buffer[i][j] = pixelArray[i][j];
       }

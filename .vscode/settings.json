@@ -19,6 +19,14 @@
         "tuple": "cpp",
         "utility": "cpp",
         "variant": "cpp",
-        "chrono": "cpp"
+        "chrono": "cpp",
+        "deque": "cpp",
+        "list": "cpp",
+        "unordered_map": "cpp",
+        "vector": "cpp",
+        "initializer_list": "cpp",
+        "span": "cpp",
+        "compare": "cpp",
+        "cstdint": "cpp"
     }
 }
