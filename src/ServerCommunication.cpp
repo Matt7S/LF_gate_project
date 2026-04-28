@@ -140,7 +140,7 @@ bool ServerCommunication::handleServerResponse() {
             if (daJson.get(jsonData, "message")) {
                 meas.lastMessage = jsonData.stringValue;
             }
-            StateManager::setState(RESETING);
+            StateManager::transitionTo(RESETING);
         }
         else {
             Serial.println("Unknown command.");

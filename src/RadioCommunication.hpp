@@ -14,11 +14,11 @@
 #include <Arduino.h>
 #include <RF24.h>
 #include "main.hpp"
+#include "Measurement.hpp"
 #include "constants.hpp"
 
 // Forward declarations for extern global objects
 extern RF24 radio;
-extern Measurement currMeasurement;
 
 /**
  * @class RadioCommunication

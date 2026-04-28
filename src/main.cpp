@@ -33,8 +33,8 @@ bool newSettingsAvailable = false;          ///< Flag indicating new settings re
 
 extern WiFiClient client;                   ///< WiFi client for server communication
 
-// Reference to current measurement (managed by MeasurementManager)
-// Defined as global for backward compatibility
+// ========== Module Accessors ==========
+#define currMeasurement MeasurementManager::getCurrentMeasurement()
 
 // ========== Hardware Instances ==========
 RF24 radio(NRF_CE, NRF_CSN);                ///< NRF24L01 radio module

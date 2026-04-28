@@ -123,8 +123,8 @@ struct Measurement {
 };
 
 // ========== Global Variables ==========
-// Macro providing access to current measurement managed by MeasurementManager
-#define currMeasurement (MeasurementManager::getCurrentMeasurement())
+// NOTE: currMeasurement is accessed via MeasurementManager::getCurrentMeasurement()
+// in modules that need it. No global extern needed due to module-based architecture.
 
 // ========== Function Prototypes ==========
 
