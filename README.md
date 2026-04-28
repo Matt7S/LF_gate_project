@@ -63,28 +63,66 @@ The gate operates using a continuous state machine to handle the flow of the com
 ```
 LF_gate_project/
 ├── include/
-│   └── constants.hpp          # Centralized constants and pin definitions
-├── lib/                       # External libraries
+│   └── constants.hpp              # Centralized constants and pin definitions
+├── lib/                           # External libraries
 ├── src/
-│   ├── main.cpp              # Main state machine implementation
-│   └── main.hpp              # Data structures and function prototypes
-├── test/                      # Unit tests
-├── platformio.ini            # PlatformIO configuration
-└── README.md                 # This file
+│   ├── main.cpp                   # Main orchestrator (lean, ~400 lines)
+│   ├── main.hpp                   # Global types and function prototypes
+│   ├── StateManager.hpp/.cpp      # State machine management (11 states)
+│   ├── HardwareControl.hpp/.cpp   # GPIO abstraction (LEDs, buttons, display)
+│   ├── Authentication.hpp/.cpp    # RFID and QR code scanning
+│   ├── Measurement.hpp/.cpp       # Time calculations and result formatting
+│   ├── RadioCommunication.hpp/.cpp    # NRF24 wireless synchronization
+│   └── ServerCommunication.hpp/.cpp   # JSON server communication
+├── test/                          # Unit tests
+├── platformio.ini                 # PlatformIO configuration
+├── CODING_STANDARDS.md            # Code style guide
+└── README.md                      # This file
 ```
 
-## 🏗️ Code Organization
+## 🏗️ Modular Architecture
 
-### Core Components:
-- **State Machine:** Implements competition flow with 11 distinct states
-- **Hardware Abstraction:** Wrapper classes for RF24, RFID, QR scanner, LED display
-- **Communication:** Dual-protocol support (WiFi/JSON for server, RF24 for gate-to-gate)
-- **Timing System:** Microsecond-precision interrupt-driven measurements
+The codebase has been refactored into specialized modules following clean code principles:
+
+### Core Modules:
+- **StateManager** - Handles 11-state finite state machine for competition flow
+  - `getCurrentState()` - Get current state
+  - `transitionTo(State)` - Change state with logging
+  - `waitForStateTransition(ms)` - Delay between state changes
+  - `reset()` - Reset to IDLE state
+
+- **HardwareControl** - GPIO abstraction layer
+  - LED control (Red, Green status indicators)
+  - Button polling (Accept, Cancel, Forfeit)
+  - P10 LED Matrix display messages and timers
+  - IR sensor interrupt attachment
+
+- **Authentication** - Competitor and robot verification
+  - RFID card scanning for users and judges
+  - QR/Barcode scanning for robots
+  - Result caching to avoid duplicate reads
+
+- **Measurement** - Time and data management
+  - Competition run measurements (MeasurementManager singleton)
+  - Time synchronization state tracking
+  - Result formatting (MM:SS:mmm format)
+
+- **RadioCommunication** - NRF24L01 wireless sync
+  - Time synchronization between Start/Finish gates
+  - Start/Finish command transmission
+  - Interrupt-driven signal handling
+
+- **ServerCommunication** - Wi-Fi JSON communication
+  - Gate settings retrieval
+  - User/Robot data fetching
+  - Score submission
+  - Connection status monitoring
 
 ### Key Files:
-- `constants.hpp` - All pin definitions and configuration constants (DRY principle)
-- `main.hpp` - Comprehensive data structures with JSDoc documentation
-- `main.cpp` - State machine and business logic with inline documentation
+- `constants.hpp` - 130+ centralized constants (pins, timeouts, addresses)
+- `main.hpp` - Measurement, Gate, and State struct definitions
+- `main.cpp` - Lean orchestrator delegating to modules (~400 lines)
+- `CODING_STANDARDS.md` - Professional C++ conventions
 
 ## 📚 Code Quality Improvements
 This project follows professional C++ coding standards:
